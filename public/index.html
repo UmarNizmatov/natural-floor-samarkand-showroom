@@ -9,7 +9,7 @@
 </head>
 <body>
 <div id="stage"></div>
-<div id="loader"><div class="ring"></div><p id="load-text">Загрузка</p></div>
+<div id="loader"><div class="ring"></div><p id="load-text">Загрузка</p><a href="route.html">Открыть лёгкий маршрут</a></div>
 
 <header class="brand"><strong>Natural Floor</strong><span>Каменный ковёр на стенах, Самарканд</span></header>
 
@@ -20,6 +20,7 @@
     <button type="button" data-time="night" aria-pressed="false">Ночь</button>
   </div>
   <button type="button" id="open-route" class="pill">Маршрут</button>
+  <a class="photo-route" href="route.html">Без 3D</a>
 </div>
 
 <p id="hint"><span id="hint-text"></span></p>
@@ -63,6 +64,17 @@
     <button class="close">Закрыть</button>
   </form>
 </dialog>
-<script type="module" src="app.js"></script>
+<script>
+(function () {
+  var timer = setTimeout(fallback, 20000);
+  function fallback() {
+    clearTimeout(timer);
+    location.replace('route.html');
+  }
+  window.streetFallback = fallback;
+  window.streetReady = function () { clearTimeout(timer); };
+})();
+</script>
+<script type="module" src="app.js" onerror="streetFallback()"></script>
 </body>
 </html>

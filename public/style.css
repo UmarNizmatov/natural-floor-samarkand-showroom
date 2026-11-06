@@ -54,3 +54,9 @@ dialog .close{background:none;text-align:center;color:var(--mute)}
 @media (max-width:640px){.brand span{display:none}.tools{top:calc(max(14px,env(safe-area-inset-top)) + 28px);left:var(--gutter);justify-content:space-between}#fps{top:calc(max(14px,env(safe-area-inset-top)) + 72px)}.seg button{padding:0 10px;font-size:13px}.card{width:124px}.card canvas{height:38px}#hint{top:calc(max(14px,env(safe-area-inset-top)) + 74px);width:max-content;border-radius:14px}.titles p{white-space:normal;font-size:12px}}
 #stage canvas{cursor:grab}
 #stage canvas.dragging{cursor:grabbing}
+
+.photo-route,#loader a{color:var(--ink)}
+.photo-route{padding:8px 10px;border-radius:10px;background:var(--glass);font-size:12px;text-decoration:none}
+@media (max-width:640px){
+  .tools .photo-route{position:fixed;top:max(8px,env(safe-area-inset-top));right:var(--gutter)}
+}

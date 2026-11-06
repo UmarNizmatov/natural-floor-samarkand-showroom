@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { stations, station, walls, bays, westCrest, eastCrest, crestAt, ROAD, across } from './site.js';
-import { pbr, paverMaterial, tactileMaterial, slopeMaterial, girihPanelMaterial, stoneDetail, wallMaterial } from './materials.js';
+import { compact, pbr, paverMaterial, tactileMaterial, slopeMaterial, girihPanelMaterial, stoneDetail, wallMaterial } from './materials.js';
 import { DESIGNS, paintDesign } from './designs.js';
 import { chunkGroup } from './culling.js';
 
@@ -166,7 +166,7 @@ function buildWall(wall, tier, detail, shared, group, colliders) {
   const curve = wall.curve, L = curve[curve.length - 1].s;
   const H = Math.max(...curve.map((p) => p.top - p.base)) + .02;
   wall.L = L; wall.H = H;
-  const pxPerMetre = tier === 'high' ? 110 : 44;
+  const pxPerMetre = tier === 'high' ? 110 : 28;
   const maxSegment = Math.floor(4096 / pxPerMetre);
   const count = Math.max(1, Math.ceil(L / maxSegment));
   wall.segments = [];
@@ -246,7 +246,7 @@ function sheet(a, b) {
 // Repaints one wall piece per frame, so switching a design never stalls the walk.
 const paintTokens = new WeakMap();
 export function paintAllWalls(allWalls, design, tier, immediate = false) {
-  const pxPerMetre = tier === 'high' ? 110 : 44;
+  const pxPerMetre = tier === 'high' ? 110 : 28;
   const jobs = [];
   allWalls.forEach((wall) => {
     const token = (paintTokens.get(wall) || 0) + 1;
@@ -326,7 +326,7 @@ function buildBay(bay, tier, detail, shared, group, colliders) {
   g.setIndex(idx);
   g.computeVertexNormals();
   if (g.attributes.normal.getY(0) < 0) { const flipped = []; for (let i = 0; i < idx.length; i += 3) flipped.push(idx[i], idx[i + 2], idx[i + 1]); g.setIndex(flipped); g.computeVertexNormals(); }
-  const pxPerMetre = tier === 'high' ? 110 : 44;
+  const pxPerMetre = tier === 'high' ? 110 : 28;
   const canvas = document.createElement('canvas');
   canvas.width = Math.ceil(L * pxPerMetre); canvas.height = Math.ceil(H * pxPerMetre);
   const map = new THREE.CanvasTexture(canvas);
@@ -427,8 +427,9 @@ class BuildingBatch {
 
 // Skyline ring: distant city, domes and the Zarafshan range in haze.
 function skylineRing(shared) {
-  const c = document.createElement('canvas'); c.width = 4096; c.height = 512;
+  const c = document.createElement('canvas'); c.width = compact ? 1024 : 4096; c.height = compact ? 128 : 512;
   const g = c.getContext('2d');
+  if (compact) g.scale(.25, .25);
   const random = seeded(9);
   const layer = (color, base, amp, freq) => {
     g.fillStyle = color; g.beginPath(); g.moveTo(0, 512);
@@ -849,7 +850,7 @@ export function buildWorld(scene, tier) {
   farGround.rotation.x = -Math.PI / 2; farGround.position.y = -6; farGround.receiveShadow = false;
   farGround.userData.keepWhole = true;
   group.add(farGround);
-  const fill = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#d9cfbd', roughness: .95 }), 1100);
+  const fill = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: '#d9cfbd', roughness: .95 }), compact ? 160 : 1100);
   const q = new THREE.Quaternion(), pos = new THREE.Vector3(), scale = new THREE.Vector3();
   const r2 = seeded(77);
   for (let i = 0; i < fill.count; i++) {
@@ -991,6 +992,7 @@ export function plantVegetation(scene, shared, models, tier) {
   placed.forEach((t, i) => { q.setFromAxisAngle(tmp.set(0, 1, 0), t.yaw); cards.setMatrixAt(i, matrix.compose(pos.set(t.x, t.y, t.z), q, scl.setScalar(t.scale))); });
   // The AO normals pass uses an opaque override material that fills the cutouts.
   cards.layers.set(NO_AMBIENT_OCCLUSION);
+  cards.visible = Boolean(models.billboard.image);
   cards.castShadow = true;
   scene.add(cards);
   // Near trees become full models; each one is drawn only inside its radius, otherwise it stays a card.
@@ -1052,7 +1054,7 @@ export function plantVegetation(scene, shared, models, tier) {
   const plants = new THREE.Group(); plants.add(box); scene.add(plants);
   chunkGroup(plants, 70);
   shared.plants = plants;
-  return { upgradeTrees, updateTrees };
+  return { upgradeTrees, updateTrees, showBillboards: () => { cards.visible = true; } };
 }
 
 export { DESIGNS };

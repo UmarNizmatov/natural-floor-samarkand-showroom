@@ -14,7 +14,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { stations, station, walls, bays, across, ROAD } from './site.js';
-import { buildWorld, paintAllWalls, plantVegetation, sectionPoint } from './world.js';
+import { buildWorld, paintAllWalls, plantVegetation, sectionPoint, NO_AMBIENT_OCCLUSION } from './world.js';
 import { DESIGNS, loadStones, paintDesign } from './designs.js';
 import { isPhone } from './materials.js';
 import { distanceCuller } from './culling.js';
@@ -53,7 +53,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, lite ? 1 : tier === 'high' ? 1
 renderer.setSize(innerWidth, innerHeight);
 renderer.info.autoReset = false;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.AgXToneMapping;
 renderer.toneMappingExposure = 1;
 $('stage').appendChild(renderer.domElement);
@@ -61,9 +61,11 @@ $('stage').appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(68, innerWidth / innerHeight, .08, 5200);
 camera.rotation.order = 'YXZ';
+camera.layers.enable(NO_AMBIENT_OCCLUSION);
 
 const sun = new THREE.DirectionalLight('#fff4e0', 3.2);
 sun.castShadow = !lite;
+sun.shadow.camera.layers.enable(NO_AMBIENT_OCCLUSION);
 sun.shadow.autoUpdate = false;
 const shadowSize = tier === 'high' ? 4096 : 1024, shadowRange = tier === 'high' ? 85 : 45;
 sun.shadow.mapSize.set(shadowSize, shadowSize);
@@ -82,6 +84,12 @@ function setupComposer() {
   gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
   gtao.updateGtaoMaterial({ radius: 1.1, distanceExponent: 1.4, thickness: 1.2, scale: 1.1, samples: 12, distanceFallOff: 1, screenSpaceRadius: false });
   gtao.blendIntensity = .85;
+  const renderAO = gtao.render.bind(gtao);
+  gtao.render = (...args) => {
+    camera.layers.disable(NO_AMBIENT_OCCLUSION);
+    try { renderAO(...args); }
+    finally { camera.layers.enable(NO_AMBIENT_OCCLUSION); }
+  };
   composer.addPass(gtao);
   // One broken pixel must not spread through the bloom blur over the whole picture.
   composer.addPass(new ShaderPass({
@@ -115,7 +123,7 @@ async function loadSky(name) {
   return (skies[name] = { texture, environment, azimuth, elevation });
 }
 const TIMES = {
-  day: { sky: 'kloofendal_48d_partly_cloudy_puresky', sun: 3.5, sunColor: '#fff1dc', env: 1, bg: 1, exposure: 1.32, fog: '#cfd8df', density: .0019, wash: 0, lamp: 0, pool: 0, win: 0, bloom: .06, elev: .95, azim: 2.5, skyline: '#ffffff' },
+  day: { sky: 'kloofendal_48d_partly_cloudy_puresky', sun: 3.5, sunColor: '#fff1dc', env: 1, bg: 1, exposure: 1.2, fog: '#cfd8df', density: .0019, wash: 0, lamp: 0, pool: 0, win: 0, bloom: .06, elev: .95, azim: 2.5, skyline: '#ffffff' },
   sunset: { sky: 'belfast_sunset_puresky', sun: 2.9, sunColor: '#ffb36b', env: .95, bg: .72, exposure: .9, fog: '#b98f79', density: .0006, wash: .12, lamp: 1.2, pool: .25, win: .35, bloom: .06, elev: .17, azim: 2.1, skyline: '#e6b394' },
   night: { sky: 'kloppenheim_02_puresky', sun: .16, sunColor: '#a9c0ff', env: .2, bg: .1, exposure: 1.5, fog: '#141a26', density: .0026, wash: .9, lamp: 7, pool: .55, win: 1.3, bloom: .22, elev: .8, azim: 2.8, skyline: '#27303f' },
 };
@@ -222,6 +230,7 @@ function movePlayer(dt) {
   velocity.x += (desired.x - velocity.x) * Math.min(1, grip * dt);
   velocity.z += (desired.z - velocity.z) * Math.min(1, grip * dt);
   if ((keys.Space || keys.jump) && onFloor) { velocity.y = JUMP; onFloor = false; }
+  keys.jump = false;
   if (!onFloor) velocity.y -= GRAVITY * dt;
   player.translate(velocity.clone().multiplyScalar(dt));
   collide();
@@ -295,7 +304,8 @@ function spawnTraffic(sedan) {
     const flat = (g.index ? g.toNonIndexed() : g).applyMatrix4(mesh.matrixWorld);
     (groups[name] = groups[name] || { list: [], source: mesh.material }).list.push(flat);
   });
-  const count = tier === 'high' ? 16 : 5;
+  const count = tier === 'high' ? 12 : 6;
+  const first = stations.indexOf(station(1640)), last = stations.indexOf(station(2400));
   carMatrices = new THREE.InstancedBufferAttribute(new Float32Array(count * 16), 16);
   carMatrices.setUsage(THREE.DynamicDrawUsage);
   Object.entries(groups).forEach(([name, { list, source }]) => {
@@ -311,16 +321,16 @@ function spawnTraffic(sedan) {
   });
   for (let i = 0; i < count; i++) {
     const north = i % 2 === 0, slow = i % 4 < 2;
-    cars.push({ north, slow, at: 80 + Math.random() * (stations.length - 160), speed: (north ? 1 : -1) * (slow ? 10 : 13.5) / 2, v: 1 });
+    cars.push({ north, slow, at: first + (i + .65) / count * (last - first), speed: (north ? 1 : -1) * (slow ? 10 : 13.5) / 2, v: 1 });
   }
 }
 const carMatrix = new THREE.Matrix4();
 function moveTraffic(dt) {
   if (!carMatrices) return;
-  const n = stations.length - 3, eye = camera.position;
+  const first = stations.indexOf(station(1640)), last = stations.indexOf(station(2400)), eye = camera.position;
   cars.forEach((c, index) => {
     c.at += c.speed * c.v * dt;
-    if (c.at > n) c.at = 3; else if (c.at < 3) c.at = n;
+    if (c.at > last) c.at = first; else if (c.at < first) c.at = last;
     const i = Math.floor(c.at), t = c.at - i, a = stations[i], b = stations[i + 1];
     const lane = (s) => (c.north ? s.width - ROAD.SIDEWALK - ROAD.LANE * (c.slow ? .26 : .74) : ROAD.SIDEWALK + ROAD.LANE * (c.slow ? .26 : .74));
     const p = sectionPoint(a, lane(a)), q = sectionPoint(b, lane(b));
@@ -344,6 +354,8 @@ function moveTraffic(dt) {
 
 // Touch navigation: arrows on the ground like Street View, but the walk is continuous.
 const arrows = [];
+const arrowGroundRay = new THREE.Ray(new THREE.Vector3(), new THREE.Vector3(0, -1, 0));
+const arrowGroundNormal = new THREE.Vector3();
 function chevronGeometry() {
   const shape = new THREE.Shape();
   [[-.62, -.26], [0, .34], [.62, -.26], [.62, -.72], [0, -.12], [-.62, -.72]].forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
@@ -353,7 +365,7 @@ function chevronGeometry() {
 function setupArrows() {
   const g = chevronGeometry();
   ['forward', 'back', 'cross'].forEach((kind) => {
-    const material = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: .92, depthTest: false, fog: false });
+    const material = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: .92, depthWrite: false, fog: false });
     const mesh = new THREE.Mesh(g, material);
     const pad = new THREE.Mesh(new THREE.CircleGeometry(1.25, 24).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
     mesh.add(pad);
@@ -376,9 +388,14 @@ function updateArrows() {
   dirs.cross = [tz * crossSign, -tx * crossSign];
   arrows.forEach((arrow) => {
     const [dx, dz] = dirs[arrow.userData.kind];
-    arrow.visible = !autopilot;
-    arrow.position.set(player.end.x + dx * 3.6, feet, player.end.z + dz * 3.6);
+    arrowGroundRay.origin.set(player.end.x + dx * 6.8, feet + 1, player.end.z + dz * 6.8);
+    const ground = worldOctree.rayIntersect(arrowGroundRay);
+    arrow.visible = !autopilot && !!ground && ground.distance < 2 && ground.triangle.getNormal(arrowGroundNormal).y > .35;
+    if (!arrow.visible) return;
+    arrow.position.copy(ground.position);
+    arrow.position.y += .09;
     arrow.rotation.y = Math.atan2(dx, dz) - Math.PI;
+    arrow.updateMatrixWorld(true);
     const facing = -Math.sin(yaw) * dx - Math.cos(yaw) * dz;
     arrow.material.opacity = facing > 0 ? .95 : .25;
   });
@@ -432,7 +449,12 @@ const pointers = new Map();
 let pinch = 0, tapStart = null;
 if (touch || params.has('arrows')) {
   canvas.style.touchAction = 'none';
-  canvas.addEventListener('pointerdown', (e) => { pointers.set(e.pointerId, [e.clientX, e.clientY]); tapStart = { x: e.clientX, y: e.clientY, t: performance.now() }; hideHint(); canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener('pointerdown', (e) => {
+    pointers.set(e.pointerId, [e.clientX, e.clientY]);
+    tapStart = pointers.size === 1 ? { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() } : null;
+    hideHint();
+    canvas.setPointerCapture(e.pointerId);
+  });
   canvas.addEventListener('pointermove', (e) => {
     const previous = pointers.get(e.pointerId);
     if (!previous) return;
@@ -443,12 +465,13 @@ if (touch || params.has('arrows')) {
       pinch = gap;
       return;
     }
-    look(-(e.clientX - previous[0]) * -1, -(e.clientY - previous[1]) * -1, -.0042 * (camera.fov / 68));
+    look(e.clientX - previous[0], e.clientY - previous[1], -.0042 * (camera.fov / 68));
+    if (tapStart && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) >= 10) tapStart = null;
     pointers.set(e.pointerId, [e.clientX, e.clientY]);
   });
   const up = (e) => {
     pointers.delete(e.pointerId); pinch = 0;
-    if (tapStart && performance.now() - tapStart.t < 320 && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) < 10) tap(e.clientX, e.clientY);
+    if (tapStart?.id === e.pointerId && performance.now() - tapStart.t < 320 && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) < 10) tap(e.clientX, e.clientY);
     tapStart = null;
   };
   canvas.addEventListener('pointerup', up);
@@ -457,13 +480,14 @@ if (touch || params.has('arrows')) {
 const ray = new THREE.Raycaster();
 function tap(x, y) {
   ray.setFromCamera({ x: x / innerWidth * 2 - 1, y: -(y / innerHeight) * 2 + 1 }, camera);
-  const hit = ray.intersectObjects(arrows, true).find((h) => h.object.userData.kind);
-  if (hit) { arrowGo(hit.object.userData.kind); return; }
   const on = worldOctree.rayIntersect(ray.ray);
+  const hit = ray.intersectObjects(arrows.filter((arrow) => arrow.visible), true)[0];
+  if (hit && (!on || hit.distance <= on.distance + .1)) { arrowGo(hit.object.userData.kind); return; }
   if (on && on.distance < 90 && on.position && on.triangle.getNormal(new THREE.Vector3()).y > .3) walkTo(on.position.x, on.position.z);
 }
 
 // Interface -------------------------------------------------------------------------------------
+const wallDesigns = new Map();
 let activeDesign = DESIGNS[0], target = 'all';
 const targetWalls = () => {
   const list = shared.wallList;
@@ -471,14 +495,35 @@ const targetWalls = () => {
   if (target === 'bays') return list.filter((w) => w.id.startsWith('zone'));
   return list.filter((w) => w.id === target);
 };
+function designForWall(wall) {
+  return wallDesigns.get(wall) || DESIGNS[0];
+}
+function syncDesignPanel() {
+  const list = targetWalls(), design = designForWall(list[0]);
+  const mixed = list.some((wall) => designForWall(wall) !== design);
+  $('design-title').textContent = mixed ? 'Разные дизайны' : design.title;
+  $('design-hint').textContent = mixed ? 'Выберите стену, чтобы увидеть её дизайн' : design.hint;
+  document.querySelectorAll('.card').forEach((card) => {
+    const selected = !mixed && card.dataset.id === design.id;
+    card.setAttribute('aria-current', String(selected));
+    if (selected) card.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  });
+  const spots = list.flatMap((wall) => designForWall(wall).id === 'assembly' ? wall.anamorph?.assembly || [] : []);
+  $('assembly').hidden = !spots.length;
+  $('assembly').onclick = () => {
+    const spot = spots[assemblyIndex++ % spots.length];
+    placePlayer(spot.eye.x, spot.eye.y - EYE, spot.eye.z, spot.eye.x + spot.look.x * 20, spot.eye.y + spot.look.y * 20, spot.eye.z + spot.look.z * 20);
+  };
+}
 function applyDesign(design) {
   activeDesign = design;
   settleUntil = performance.now() + 5000;
-  $('design-title').textContent = design.title; $('design-hint').textContent = design.hint;
-  document.querySelectorAll('.card').forEach((c) => { const on = c.dataset.id === design.id; c.setAttribute('aria-current', String(on)); if (on) c.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }); });
-  paintAllWalls(targetWalls(), design, tier, !shared.started);
-  $('assembly').hidden = design.id !== 'assembly';
-  shared.viewMarkers?.forEach((m) => { m.visible = design.id === 'assembly'; });
+  const list = targetWalls();
+  list.forEach((wall) => wallDesigns.set(wall, design));
+  paintAllWalls(list, design, tier, !shared.started);
+  syncDesignPanel();
+  const spots = shared.wallList.flatMap((wall) => designForWall(wall).id === 'assembly' ? wall.anamorph?.assembly || [] : []);
+  shared.viewMarkers.forEach((marker, index) => { marker.visible = spots.includes(shared.viewpoints[index]); });
 }
 function buildCards() {
   const list = $('cards'), thumbs = [];
@@ -495,12 +540,22 @@ function buildCards() {
   setTimeout(paintNext, 400);
 }
 const renderSoon = () => {};
+function oppositeView(point, west, offset = 0) {
+  const s = stationAtZ(point[2] + offset);
+  return [sectionPoint(s, west ? s.width - 1.8 : 1.8), point];
+}
+function bayView(id) {
+  const bay = bays[id];
+  const geometry = bay.segments[0].mesh.geometry;
+  geometry.computeBoundingBox();
+  return oppositeView(geometry.boundingBox.getCenter(new THREE.Vector3()).toArray(), bay.side === 'west', id === 'zone52' ? 8 : 0);
+}
 const SPOTS = {
   low: () => { const s = station(1878), p = sectionPoint(s, s.width - 2.2), t = station(1915), l = across(t, .9); return [p, [l[0], l[1] + 2, l[2]]]; },
-  high: () => { const s = station(1905), p = sectionPoint(s, 2.4), t = station(1860), l = across(t, .05); return [p, [l[0], l[1] + 2.4, l[2]]]; },
+  high: () => { const c = walls.high.curve[Math.floor(walls.high.curve.length / 2)]; return oppositeView([c.x, (c.base + c.top) / 2, c.z], true); },
   step: () => { const c = walls.step.curve[2]; return [[c.x + 8, c.base + 0.1, c.z - 6.5], [c.x, c.base + 2.2, c.z]]; },
-  zone68: () => { const s = station(2020), p = sectionPoint(s, 2), t = station(1990), l = across(t, -.02); return [p, [l[0], l[1] + 1.1, l[2]]]; },
-  zone52: () => { const s = station(2015), p = sectionPoint(s, s.width - 2), t = station(1985), l = across(t, 1.02); return [p, [l[0], l[1] + 1.1, l[2]]]; },
+  zone68: () => bayView('zone68'),
+  zone52: () => bayView('zone52'),
   road: () => { const s = station(1860), p = sectionPoint(s, s.width / 2), t = station(1960), l = across(t, .5); return [p, [l[0], l[1] + 2, l[2]]]; },
 };
 function goto(name) {
@@ -514,19 +569,18 @@ function setupUI() {
   document.querySelectorAll('[data-target]').forEach((b) => {
     b.onclick = () => {
       target = b.dataset.target;
+      activeDesign = designForWall(targetWalls()[0]);
+      syncDesignPanel();
       document.querySelectorAll('[data-target]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
     };
   });
   document.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => goto(b.dataset.go); });
   $('open-route').onclick = () => $('route').showModal();
-  $('assembly').onclick = () => {
-    const spot = shared.viewpoints[assemblyIndex++ % shared.viewpoints.length];
-    placePlayer(spot.eye.x, spot.eye.y - EYE, spot.eye.z, spot.eye.x + spot.look.x * 20, spot.eye.y + spot.look.y * 20, spot.eye.z + spot.look.z * 20);
-  };
   $('toggle').onclick = () => document.body.classList.toggle('collapsed');
-  const jump = $('jump');
-  jump.addEventListener('pointerdown', (e) => { e.preventDefault(); keys.jump = true; });
-  ['pointerup', 'pointercancel', 'pointerleave'].forEach((n) => jump.addEventListener(n, () => { keys.jump = false; }));
+  document.querySelectorAll('[data-walk]').forEach((button) => {
+    button.onclick = () => { hideHint(); arrowGo(button.dataset.walk); };
+  });
+  $('jump').onclick = () => { hideHint(); keys.jump = true; };
   if (touch) document.body.classList.add('touch');
   $('hint-text').textContent = touch ? 'Свайп: осмотреться. Стрелка или касание по земле: идти. Кнопка: прыжок.' : 'Тяни мышью или стрелками: поворот. WASD: идти, Shift: бег, пробел: прыжок. Q и E: дизайн, T: время, M: маршрут.';
 }
@@ -650,8 +704,6 @@ async function start() {
   updateTrees = vegetation.updateTrees;
   cullWorld = distanceCuller([...shared.group.children, ...shared.plants.children].filter((o) => (o.isMesh || o.isInstancedMesh) && !o.userData.keepWhole && !shared.groundMaterials.has(o.material)), tier === 'high' ? 300 : 190);
 
-  // Traffic is off for now, ?cars turns it back on.
-  if (params.has('cars')) spawnTraffic(await load('sedan'));
   birds = createBirds(scene, tier === 'high' ? 36 : 18);
   shared.collision.updateMatrixWorld(true);
   worldOctree.fromGraphNode(shared.collision);
@@ -669,6 +721,10 @@ async function start() {
   requestAnimationFrame(frame);
   $('loader').classList.add('done');
   mark('первый кадр');
+  if (!lite && !params.has('no-cars')) load('sedan').then((sedan) => {
+    spawnTraffic(sedan);
+    moveTraffic(0);
+  }).catch((error) => console.warn('Не удалось загрузить машины', error));
 
   // Full tree models replace the nearest billboards a moment later, without holding up the start.
   if (tier === 'high') load('island_tree_01').then((tree) => {

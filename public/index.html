@@ -24,11 +24,15 @@
 
 <p id="hint"><span id="hint-text"></span></p>
 <p id="fps"></p>
-<button id="jump" type="button" aria-label="Прыжок">
-  <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6"/><path d="M6 11l6-6 6 6"/></svg>
-</button>
+
 
 <section class="panel" aria-label="Дизайны">
+  <div class="touch-controls" role="group" aria-label="Управление прогулкой">
+    <button type="button" data-walk="back" aria-label="Идти к южным воротам">↓</button>
+    <button type="button" data-walk="cross" aria-label="Перейти дорогу">⇄</button>
+    <button type="button" data-walk="forward" aria-label="Идти к северным воротам">↑</button>
+    <button type="button" id="jump">Прыжок</button>
+  </div>
   <div class="panel-head">
     <div class="titles"><h1 id="design-title"></h1><p id="design-hint"></p></div>
     <button type="button" id="assembly" class="accent" hidden>К точке сборки</button>

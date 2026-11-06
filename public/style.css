@@ -34,9 +34,11 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .card[aria-current=true]{border-color:var(--accent)}
 .card canvas{display:block;width:100%;height:46px}
 .card span{display:block;padding:5px 8px 6px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#jump{position:fixed;right:var(--gutter);bottom:230px;width:60px;height:60px;display:none;place-items:center;background:var(--glass);border:1px solid var(--line);border-radius:999px;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);touch-action:none;user-select:none}
-.touch #jump{display:grid}
-.touch.collapsed #jump{bottom:100px}
+.touch-controls{display:none}
+.touch .touch-controls{position:absolute;inset:auto 0 calc(100% + 10px);display:flex;gap:6px;pointer-events:none}
+.touch-controls button{min-width:44px;min-height:44px;padding:0 10px;border-radius:12px;border:1px solid var(--line);background:var(--glass);backdrop-filter:blur(14px);pointer-events:auto;touch-action:manipulation}
+.touch-controls [data-walk]{font-size:21px}
+#jump{margin-left:auto}
 dialog{border:1px solid var(--line);border-radius:14px;background:#191d21;color:var(--ink);padding:16px;width:min(380px,calc(100vw - 32px))}
 dialog::backdrop{background:rgba(0,0,0,.45)}
 dialog h2{margin:0 0 10px;font-size:17px}
@@ -49,6 +51,6 @@ dialog .close{background:none;text-align:center;color:var(--mute)}
 .ring{width:42px;height:42px;border-radius:50%;border:3px solid rgba(255,255,255,.14);border-top-color:var(--accent);animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.ring{animation-duration:3s}*{transition:none!important}}
-@media (max-width:640px){.brand span{display:none}.seg button{padding:0 10px;font-size:13px}.card{width:124px}.card canvas{height:38px}#hint{top:64px;border-radius:14px}.titles p{white-space:normal;font-size:12px}}
+@media (max-width:640px){.brand span{display:none}.tools{top:calc(max(14px,env(safe-area-inset-top)) + 28px);left:var(--gutter);justify-content:space-between}#fps{top:calc(max(14px,env(safe-area-inset-top)) + 72px)}.seg button{padding:0 10px;font-size:13px}.card{width:124px}.card canvas{height:38px}#hint{top:calc(max(14px,env(safe-area-inset-top)) + 74px);width:max-content;border-radius:14px}.titles p{white-space:normal;font-size:12px}}
 #stage canvas{cursor:grab}
 #stage canvas.dragging{cursor:grabbing}

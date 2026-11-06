@@ -244,21 +244,26 @@ function sheet(a, b) {
 }
 
 // Repaints one wall piece per frame, so switching a design never stalls the walk.
-let paintToken = 0;
+const paintTokens = new WeakMap();
 export function paintAllWalls(allWalls, design, tier, immediate = false) {
   const pxPerMetre = tier === 'high' ? 110 : 44;
   const jobs = [];
-  allWalls.forEach((wall, wi) => wall.segments.forEach((segment) => jobs.push(() => {
-    paintDesign(segment.canvas.getContext('2d'), design, { L: wall.L, H: wall.H, s0: segment.s0, pxPerMetre, wall, seed: 7 + wi * 13 });
-    segment.map.needsUpdate = true;
-    segment.mesh.material.map = segment.map;
-  })));
-  const token = ++paintToken;
+  allWalls.forEach((wall) => {
+    const token = (paintTokens.get(wall) || 0) + 1;
+    paintTokens.set(wall, token);
+    const seed = 7 + wall.id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+    wall.segments.forEach((segment) => jobs.push(() => {
+      if (paintTokens.get(wall) !== token) return;
+      paintDesign(segment.canvas.getContext('2d'), design, { L: wall.L, H: wall.H, s0: segment.s0, pxPerMetre, wall, seed });
+      segment.map.needsUpdate = true;
+      segment.mesh.material.map = segment.map;
+    }));
+  });
   if (immediate) { jobs.forEach((job) => job()); return; }
   const next = () => {
-    if (token !== paintToken || !jobs.length) return;
+    if (!jobs.length) return;
     jobs.shift()();
-    requestAnimationFrame(next);
+    if (jobs.length) requestAnimationFrame(next);
   };
   next();
 }
@@ -393,8 +398,13 @@ class BuildingBatch {
           const px = x + lx * cos + lz * sin, pz = z - lx * sin + lz * cos;
           this.box(this.frames, px, wy - .07, pz, 1.46, 1.74, .12, yaw, '#f1ece2');
           this.box(this.glass, x + lx * cos + (lz + .05 * face) * sin, wy, z - lx * sin + (lz + .05 * face) * cos, 1.3, 1.6, .03, yaw);
+          this.box(this.frames, px, wy - .13, pz, 1.65, .11, .27, yaw, '#d7c2a7');
+          const mullion = lz + .08 * face;
+          this.box(this.frames, x + lx * cos + mullion * sin, wy, z - lx * sin + mullion * cos, .06, 1.6, .045, yaw, '#e4d8c9');
         }
       }
+      const doorZ = (d / 2 + .055) * face;
+      this.box(this.frames, x + doorZ * sin, y, z + doorZ * cos, 1.08, 2.18, .16, yaw, '#735643');
     }
     const footprint = new THREE.BoxGeometry(w, h, d);
     footprint.applyMatrix4(new THREE.Matrix4().makeRotationY(yaw).setPosition(x, y + h / 2, z));
@@ -884,7 +894,7 @@ export function buildWorld(scene, tier) {
     return mesh;
   };
   instance(poleG, steel); instance(armG, steel); instance(baseG, steel); instance(lampHead, lampMaterial);
-  // Benches on the sidewalks, facing the walls.
+  // Benches sit next to the walls, leaving a clear walking lane.
   const benchWood = new THREE.MeshStandardMaterial({ color: '#7a5a3c', roughness: .6 });
   const benchIron = new THREE.MeshStandardMaterial({ color: '#23262a', roughness: .5, metalness: .6 });
   const seat = new THREE.BoxGeometry(1.9, .05, .46); seat.translate(0, .46, 0);
@@ -895,8 +905,8 @@ export function buildWorld(scene, tier) {
     const s = stations[i];
     if (s.Y < 1700 || s.Y > 2300) continue;
     const a = axis(s);
-    benchSpots.push({ p: sectionPoint(s, 2.1), yaw: -Math.atan2(a[1], a[0]) + Math.PI / 2 + Math.PI });
-    benchSpots.push({ p: sectionPoint(s, s.width - 2.1), yaw: -Math.atan2(a[1], a[0]) + Math.PI / 2 });
+    benchSpots.push({ p: sectionPoint(s, .95), yaw: -Math.atan2(a[1], a[0]) + Math.PI / 2 });
+    benchSpots.push({ p: sectionPoint(s, s.width - .95), yaw: -Math.atan2(a[1], a[0]) + Math.PI / 2 + Math.PI });
   }
   [[seat, benchWood], [back, benchWood], [legs, benchIron]].forEach(([geometry, material]) => {
     const mesh = new THREE.InstancedMesh(geometry, material, benchSpots.length);
@@ -926,6 +936,7 @@ export function buildWorld(scene, tier) {
   chunkGroup(group, 200);
   shared.group = group;
   shared.groundMaterials = new Set([asphalt, pavers, redPavers, beige, tactile, curbStone, lawn, ground]);
+  shared.plantMaterials = new Set([lawn, ground]);
   shared.leafMap = lawn.map; shared.leafNormal = lawn.normalMap;
   // Colliders into one invisible graph for the Octree.
   const collisionGroup = new THREE.Group();
@@ -938,19 +949,32 @@ export function buildWorld(scene, tier) {
 }
 
 // Vegetation from Poly Haven models, instanced. Far copies use a rendered billboard.
+export const NO_AMBIENT_OCCLUSION = 1;
+
 export function plantVegetation(scene, shared, models, tier) {
   const random = seeded(31);
   const spots = [];
   shared.crestLine.west.forEach((p, i) => { if (i % 5 === 0) spots.push({ p, s: shared.coarseStations[i], side: -1 }); });
   shared.crestLine.east.forEach((p, i) => { if (i % 5 === 2) spots.push({ p, s: shared.coarseStations[i], side: 1 }); });
   const matrix = new THREE.Matrix4(), q = new THREE.Quaternion(), pos = new THREE.Vector3(), scl = new THREE.Vector3();
-  const placed = spots.map(({ p, s, side }) => {
+  shared.group.updateMatrixWorld(true);
+  const terrain = shared.group.children.filter((mesh) => shared.groundMaterials.has(mesh.material));
+  const ray = new THREE.Raycaster(undefined, new THREE.Vector3(0, -1, 0), 0, 2);
+  const plantBase = (x, y, z, landscapeOnly) => {
+    ray.ray.origin.set(x, y + 1, z);
+    const hit = ray.intersectObjects(terrain, false)[0];
+    if (hit && (!landscapeOnly || shared.plantMaterials.has(hit.object.material))) return hit.point.y;
+  };
+  const placed = spots.flatMap(({ p, s, side }) => {
     const [ax, az] = axis(s), off = 5.5 + random() * 2.6;
-    return { x: p[0] + side * ax * off, y: p[1] + .1, z: p[2] + side * az * off, scale: .85 + random() * .5, yaw: random() * 6.28, Y: s.Y };
+    const x = p[0] + side * ax * off, z = p[2] + side * az * off;
+    const scale = .85 + random() * .5, yaw = random() * 6.28;
+    const y = plantBase(x, p[1], z, true);
+    return y === undefined ? [] : [{ x, y, z, scale, yaw, Y: s.Y }];
   });
   // Wide median boulevard gets its own row of trees.
   stations.forEach((s, i) => {
-    if (i % 7 === 0 && s.width - 2 * (SIDEWALK + LANE) > 5) { const c = across(s, .5); placed.push({ x: c[0], y: c[1] + .1, z: c[2], scale: .8 + random() * .4, yaw: random() * 6.28, Y: s.Y, median: true }); }
+    if (i % 7 === 0 && s.width - 2 * (SIDEWALK + LANE) > 5) { const c = sectionPoint(s, s.width / 2, .05); placed.push({ x: c[0], y: c[1], z: c[2], scale: .8 + random() * .4, yaw: random() * 6.28, Y: s.Y, median: true }); }
   });
   placed.forEach((t) => { const box = new THREE.BoxGeometry(.7, 3, .7); box.translate(t.x, t.y + 1.5, t.z); shared.collision.add(new THREE.Mesh(box)); });
   // All trees start as the baked billboard; the full models replace the nearest ones after loading.
@@ -958,13 +982,15 @@ export function plantVegetation(scene, shared, models, tier) {
   cross.translate(0, w / 2, 0);
   // Lit from above so neither crossed plane reads as a dark sheet.
   const up = cross.attributes.normal; for (let i = 0; i < up.count; i++) up.setXYZ(i, .15, .95, .15);
-  const cardMaterial = new THREE.MeshStandardMaterial({ map: models.billboard, alphaTest: .42, side: THREE.DoubleSide, roughness: .85 });
+  const cardMaterial = new THREE.MeshStandardMaterial({ map: models.billboard, color: '#c6d3af', alphaTest: .42, side: THREE.DoubleSide, roughness: .85, envMapIntensity: .65 });
   // Both faces of a card must light the same, otherwise half of each tree turns black.
   cardMaterial.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin.replace('gl_FrontFacing ? 1.0 : - 1.0', '1.0'));
   };
   const cards = new THREE.InstancedMesh(cross, cardMaterial, placed.length);
   placed.forEach((t, i) => { q.setFromAxisAngle(tmp.set(0, 1, 0), t.yaw); cards.setMatrixAt(i, matrix.compose(pos.set(t.x, t.y, t.z), q, scl.setScalar(t.scale))); });
+  // The AO normals pass uses an opaque override material that fills the cutouts.
+  cards.layers.set(NO_AMBIENT_OCCLUSION);
   cards.castShadow = true;
   scene.add(cards);
   // Near trees become full models; each one is drawn only inside its radius, otherwise it stays a card.
@@ -1003,6 +1029,7 @@ export function plantVegetation(scene, shared, models, tier) {
   const shrubs = [];
   shared.crestLine.west.forEach((p, i) => { const s = shared.coarseStations[i]; if (i % 2 === 0 && s.Y > 1700 && s.Y < 2300) { const [ax, az] = axis(s); shrubs.push([p[0] - ax * 3.9, p[1] + .35, p[2] - az * 3.9]); } });
   shared.crestLine.east.forEach((p, i) => { const s = shared.coarseStations[i]; if (i % 2 === 1 && s.Y > 1700 && s.Y < 2300) { const [ax, az] = axis(s); shrubs.push([p[0] + ax * 3.9, p[1] + .35, p[2] + az * 3.9]); } });
+  const crestShrubCount = shrubs.length;
   stations.forEach((s, i) => {
     const room = s.width - 2 * (SIDEWALK + LANE);
     if (i % 2 === 0 && room > 3.5 && s.Y > 1650 && s.Y < 2380) { const a = sectionPoint(s, SIDEWALK + LANE + 1.1, .4), b = sectionPoint(s, s.width - SIDEWALK - LANE - 1.1, .4); shrubs.push(a, b); }
@@ -1012,8 +1039,15 @@ export function plantVegetation(scene, shared, models, tier) {
   const position = ball.attributes.position;
   for (let i = 0; i < position.count; i++) { const k = 1 + Math.sin(position.getX(i) * 13) * Math.sin(position.getY(i) * 11) * Math.sin(position.getZ(i) * 12) * .09; position.setXYZ(i, position.getX(i) * k, position.getY(i) * k, position.getZ(i) * k); }
   ball.computeVertexNormals();
-  const box = new THREE.InstancedMesh(ball, new THREE.MeshStandardMaterial({ map: shared.leafMap, normalMap: shared.leafNormal, color: '#5d7c3c', roughness: .95 }), shrubs.length);
-  shrubs.forEach((p, i) => box.setMatrixAt(i, matrix.compose(pos.set(p[0], p[1], p[2]), q.identity(), scl.setScalar(.85 + random() * .4))));
+  const rooted = shrubs.flatMap(([x, y, z], i) => {
+    const base = plantBase(x, y - .35, z, i < crestShrubCount);
+    return base === undefined ? [] : [[x, base, z]];
+  });
+  const box = new THREE.InstancedMesh(ball, new THREE.MeshStandardMaterial({ map: shared.leafMap, normalMap: shared.leafNormal, color: '#5d7c3c', roughness: .95 }), rooted.length);
+  rooted.forEach(([x, y, z], i) => {
+    const scale = .85 + random() * .4;
+    box.setMatrixAt(i, matrix.compose(pos.set(x, y + .46 * scale, z), q.identity(), scl.setScalar(scale)));
+  });
   box.castShadow = tier === 'high'; box.receiveShadow = true;
   const plants = new THREE.Group(); plants.add(box); scene.add(plants);
   chunkGroup(plants, 70);

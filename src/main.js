@@ -16,39 +16,40 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { stations, station, walls, bays, across, ROAD } from './site.js';
 import { buildWorld, paintAllWalls, plantVegetation, sectionPoint, NO_AMBIENT_OCCLUSION } from './world.js';
 import { DESIGNS, loadStones, paintDesign } from './designs.js';
-import { isPhone, compact } from './materials.js';
+import { loadMaterialTextures, isPhone } from './materials.js';
 import { distanceCuller } from './culling.js';
 import { createBirds } from './birds.js';
 
 const params = new URLSearchParams(location.search);
 const touch = isPhone;
 // Each lost GPU context restarts the page one quality level lower instead of leaving a dead screen.
-const lite = params.has('lite');
-const tier = compact ? 'low' : 'high';
+const readCrashes = () => { try { return Number(sessionStorage.getItem('street-crashes')) || 0; } catch { return 0; } };
+const crashes = readCrashes();
+const lite = crashes >= 1 || params.has('lite');
+const tier = params.get('q') === 'low' ? 'low' : 'high';
 const $ = (id) => document.getElementById(id);
 
 let renderer;
 try {
-  renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: compact ? 'low-power' : 'high-performance', preserveDrawingBuffer: params.has('shot') });
+  renderer = new THREE.WebGLRenderer({ antialias: tier !== 'high', powerPreference: 'high-performance', preserveDrawingBuffer: params.has('shot') });
 } catch (error) {
-  window.streetFallback();
+  $('load-text').textContent = 'Браузер не смог запустить 3D. Закройте лишние вкладки и обновите страницу.';
   throw error;
 }
 // A phone can drop the 3D context when it runs short of memory: say so instead of freezing.
 renderer.domElement.addEventListener('webglcontextlost', (event) => {
   event.preventDefault();
   $('loader').classList.remove('done');
-  if (!lite && tier === 'high') {
+  if (crashes < 2) {
     $('load-text').textContent = 'Перезапускаем в лёгком режиме';
-    try { sessionStorage.setItem('street-crashed', '1'); } catch { /* Query flag also covers private mode. */ }
-    params.set('lite', '1');
-    location.replace(`?${params}`);
+    try { sessionStorage.setItem('street-crashes', String(crashes + 1)); } catch { /* private mode: reload once anyway */ }
+    setTimeout(() => location.reload(), 600);
   } else {
-    window.streetFallback();
+    $('load-text').textContent = 'Этому устройству не хватает памяти для 3D. Закройте лишние вкладки и обновите страницу.';
+    document.querySelector('.ring').style.display = 'none';
   }
 });
-const lowPixelRatio = () => Math.min(devicePixelRatio, 1, Math.sqrt(420000 / (innerWidth * innerHeight)));
-renderer.setPixelRatio(compact ? lowPixelRatio() : Math.min(devicePixelRatio, 1.6));
+renderer.setPixelRatio(Math.min(devicePixelRatio, lite ? 1 : tier === 'high' ? 1.6 : 1.25));
 renderer.setSize(innerWidth, innerHeight);
 renderer.info.autoReset = false;
 renderer.shadowMap.enabled = true;
@@ -63,15 +64,14 @@ camera.rotation.order = 'YXZ';
 camera.layers.enable(NO_AMBIENT_OCCLUSION);
 
 const sun = new THREE.DirectionalLight('#fff4e0', 3.2);
-sun.castShadow = !compact;
+sun.castShadow = !lite;
 sun.shadow.camera.layers.enable(NO_AMBIENT_OCCLUSION);
 sun.shadow.autoUpdate = false;
 const shadowSize = tier === 'high' ? 4096 : 1024, shadowRange = tier === 'high' ? 85 : 45;
 sun.shadow.mapSize.set(shadowSize, shadowSize);
 Object.assign(sun.shadow.camera, { left: -shadowRange, right: shadowRange, top: shadowRange, bottom: -shadowRange, near: 10, far: 500 });
 sun.shadow.bias = -.00025; sun.shadow.normalBias = .035;
-const ambient = new THREE.HemisphereLight('#dae8ff', '#ad9274', 0);
-scene.add(sun, sun.target, ambient);
+scene.add(sun, sun.target);
 scene.fog = new THREE.FogExp2('#c7d0d8', .0021);
 
 let composer = null, gtao = null, bloom = null;
@@ -106,11 +106,11 @@ if (tier === 'high') setupComposer();
 
 // Time of day: the sun in the photo-sky drives the shadow direction.
 const hdr = new HDRLoader();
-const pmrem = compact ? null : new THREE.PMREMGenerator(renderer);
+const pmrem = new THREE.PMREMGenerator(renderer);
 const skies = {};
 async function loadSky(name) {
   if (skies[name]) return skies[name];
-  const texture = await hdr.loadAsync(`assets/hdr/1k/${name}.hdr`);
+  const texture = await hdr.loadAsync(`assets/hdr/${name}.hdr`);
   texture.mapping = THREE.EquirectangularReflectionMapping;
   const { width: w, height: h, data } = texture.image;
   let best = -1, bx = 0, by = 0;
@@ -127,7 +127,7 @@ const TIMES = {
   sunset: { sky: 'belfast_sunset_puresky', sun: 2.9, sunColor: '#ffb36b', env: .95, bg: .72, exposure: .9, fog: '#b98f79', density: .0006, wash: .12, lamp: 1.2, pool: .25, win: .35, bloom: .06, elev: .17, azim: 2.1, skyline: '#e6b394' },
   night: { sky: 'kloppenheim_02_puresky', sun: .16, sunColor: '#a9c0ff', env: .2, bg: .1, exposure: 1.5, fog: '#141a26', density: .0026, wash: .9, lamp: 7, pool: .55, win: 1.3, bloom: .22, elev: .8, azim: 2.8, skyline: '#27303f' },
 };
-const lampLights = Array.from({ length: compact ? 0 : 8 }, () => { const l = new THREE.PointLight('#ffd7a6', 0, 34, 1.7); l.visible = false; scene.add(l); return l; });
+const lampLights = Array.from({ length: lite ? 0 : tier === 'high' ? 8 : 3 }, () => { const l = new THREE.PointLight('#ffd7a6', 0, 34, 1.7); l.visible = false; scene.add(l); return l; });
 let lampPower = 0, lampTick = 0;
 function updateLampLights(dt) {
   if (!lampPower || (lampTick -= dt) > 0) return;
@@ -146,26 +146,15 @@ async function setTime(name) {
   currentTime = name;
   settleUntil = performance.now() + 6000;
   document.querySelectorAll('[data-time]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.time === name)));
-  const t = TIMES[name];
-  const sky = compact ? null : await loadSky(t.sky).catch(() => null);
+  const t = TIMES[name], sky = await loadSky(t.sky);
   if (currentTime !== name) return;
-  if (sky) {
-    scene.background = sky.sharp || sky.texture;
-    if (!sky.sharp) hdr.loadAsync(`assets/hdr/${t.sky}.hdr`).then((sharp) => {
-      sharp.mapping = THREE.EquirectangularReflectionMapping;
-      sky.sharp = sharp;
-      if (currentTime === name) scene.background = sharp;
-    }).catch(() => {});
-  } else {
-    const skyColors = { day: '#9bb8da', sunset: '#ac797a', night: '#101927' };
-    scene.background = new THREE.Color(skyColors[name]);
-  }
-  scene.environment = sky?.environment || null;
-  ambient.intensity = sky ? 0 : name === 'night' ? .6 : 1.65;
-  const rotation = (sky?.azimuth ?? t.azim) - t.azim;
+  scene.background = sky.sharp || sky.texture;
+  scene.environment = sky.environment;
+  // Rotate the sky so its sun falls where the walls show their relief best.
+  const rotation = sky.azimuth - t.azim;
   scene.backgroundRotation.y = scene.environmentRotation.y = rotation;
   scene.backgroundIntensity = t.bg; scene.environmentIntensity = t.env;
-  sunDirection.setFromSphericalCoords(1, Math.PI / 2 - Math.max(sky?.elevation ?? t.elev, t.elev), t.azim + Math.PI / 2);
+  sunDirection.setFromSphericalCoords(1, Math.PI / 2 - Math.max(sky.elevation, t.elev), t.azim + Math.PI / 2);
   sun.intensity = t.sun; sun.color.set(t.sunColor);
   renderer.toneMappingExposure = t.exposure;
   scene.fog.color.set(t.fog); scene.fog.density = t.density * (tier === 'high' ? 1 : 1.6);
@@ -614,7 +603,6 @@ function resize() {
   if (innerWidth === lastSize[0] && innerHeight === lastSize[1]) return;
   lastSize = [innerWidth, innerHeight];
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  if (compact) renderer.setPixelRatio(Math.min(renderer.getPixelRatio(), lowPixelRatio()));
   renderer.setSize(innerWidth, innerHeight);
   composer?.setSize(innerWidth, innerHeight);
 }
@@ -640,9 +628,6 @@ function followSun() {
 let cullTick = 0, cullWorld = () => {}, updateTrees = () => {};
 let qualityStep = 0, measureFrom = 0, measured = 0, slowWindows = 0, settleUntil = 9000;
 const setRatio = (ratio) => { renderer.setPixelRatio(ratio); composer?.setPixelRatio(ratio); };
-const QUALITY_STEPS = tier === 'high'
-  ? [() => { gtao.enabled = false; }, () => setRatio(Math.min(renderer.getPixelRatio(), 1.25)), () => { bloom.enabled = false; }, () => setRatio(1)]
-  : [() => setRatio(Math.min(renderer.getPixelRatio(), .85)), () => setRatio(Math.min(renderer.getPixelRatio(), .65))];
 function measure(now) {
   if (document.hidden) { measureFrom = 0; return; }
   if (!measureFrom) { measureFrom = now; measured = 0; return; }
@@ -651,7 +636,7 @@ function measure(now) {
   fps.value = measured * 1000 / (now - measureFrom);
   measureFrom = now; measured = 0;
   slowWindows = fps.value < 34 ? slowWindows + 1 : 0;
-  if (slowWindows >= 2 && now > settleUntil && qualityStep < QUALITY_STEPS.length) { QUALITY_STEPS[qualityStep++](); slowWindows = 0; }
+
   if (params.has('fps')) $('fps').textContent = `${fps.value.toFixed(0)} fps, ${renderer.info.render.calls} вызовов, ${renderer.info.render.triangles} треуг., шаг ${qualityStep}`;
 }
 function frame(now) {
@@ -664,6 +649,7 @@ function frame(now) {
   updateArrows();
   followSun();
   renderer.info.reset();
+  streamVisibleScene();
   if (composer) composer.render(); else renderer.render(scene, camera);
   measure(now);
   requestAnimationFrame(frame);
@@ -681,6 +667,47 @@ function bakeTree(tree) {
   return r.domElement.toDataURL('image/png');
 }
 
+const streamFrustum = new THREE.Frustum();
+const streamMatrix = new THREE.Matrix4();
+const streamBounds = new THREE.Box3();
+const streamCenter = new THREE.Vector3();
+const streamed = new WeakMap();
+let streaming = 0, streamTick = 0;
+function streamVisibleScene(initial = false) {
+  if (!initial && performance.now() < streamTick) return;
+  streamTick = performance.now() + 250;
+  camera.updateMatrixWorld();
+  streamFrustum.setFromProjectionMatrix(streamMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const jobs = [];
+  scene.traverse((object) => {
+    if (!object.isMesh || !object.visible || !object.material) return;
+    object.updateWorldMatrix(true, false);
+    streamBounds.setFromObject(object);
+    const near = streamBounds.distanceToPoint(camera.position) < 120;
+    const inView = streamFrustum.intersectsBox(streamBounds);
+    if (!near && !inView) return;
+    const distance = streamBounds.getCenter(streamCenter).distanceTo(camera.position);
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.forEach((material) => {
+      if (streamed.has(material)) return;
+      jobs.push({ material, priority: distance + (inView ? 0 : 80) });
+    });
+  });
+  jobs.sort((a, b) => a.priority - b.priority);
+  const started = [];
+  for (const { material } of jobs) {
+    if (streamed.has(material) || (!initial && streaming >= 2)) continue;
+    streaming++;
+    const task = loadMaterialTextures(material).catch((error) => {
+      streamed.delete(material);
+      console.warn('Повтор загрузки материала', error);
+    }).finally(() => { streaming--; });
+    streamed.set(material, task);
+    started.push(task);
+  }
+  return Promise.all(started);
+}
+
 async function start() {
   const started = performance.now(), mark = (label) => { if (params.has('fps')) console.info(label, Math.round(performance.now() - started), 'ms'); };
   const progress = (text) => { $('load-text').textContent = text; };
@@ -689,9 +716,8 @@ async function start() {
   await breathe();
   const gltf = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   const load = (name) => gltf.loadAsync(`assets/models/${name}.glb`).then((r) => r.scene);
-  let vegetation;
-  const billboard = new THREE.TextureLoader().load('assets/tree.webp', () => vegetation?.showBillboards());
-  if (!compact) await loadStones();
+  const billboardLoad = new THREE.TextureLoader().loadAsync('assets/tree.webp');
+  await Promise.all([loadStones(), document.fonts.load('700 58px Golos').catch(() => {})]);
   shared = buildWorld(scene, tier);
   mark('мир');
   addViewMarkers();
@@ -705,12 +731,13 @@ async function start() {
   mark('небо');
   progress('Настраиваем физику');
   await breathe();
-  billboard.colorSpace = THREE.SRGBColorSpace; billboard.anisotropy = compact ? 2 : 8;
-  vegetation = plantVegetation(scene, shared, { billboard }, tier);
+  const billboard = await billboardLoad;
+  billboard.colorSpace = THREE.SRGBColorSpace; billboard.anisotropy = 8;
+  const vegetation = plantVegetation(scene, shared, { billboard }, tier);
   updateTrees = vegetation.updateTrees;
-  cullWorld = distanceCuller([...shared.group.children, ...shared.plants.children].filter((o) => (o.isMesh || o.isInstancedMesh) && !o.userData.keepWhole && !shared.groundMaterials.has(o.material)), compact ? 135 : 300);
+  cullWorld = distanceCuller([...shared.group.children, ...shared.plants.children].filter((o) => (o.isMesh || o.isInstancedMesh) && !o.userData.keepWhole && !shared.groundMaterials.has(o.material)), tier === 'high' ? 300 : 190);
 
-  if (!compact) birds = createBirds(scene, 36);
+  birds = createBirds(scene, tier === 'high' ? 36 : 18);
   shared.collision.updateMatrixWorld(true);
   worldOctree.fromGraphNode(shared.collision);
   mark('физика');
@@ -720,15 +747,16 @@ async function start() {
   await breathe();
   movePlayer(.001);
   followSun(); followSun(); followSun();
-  if (!compact) await renderer.compileAsync(scene, camera).catch(() => {});
+  await streamVisibleScene(true);
+  await renderer.compileAsync(scene, camera).catch(() => {});
   mark('шейдеры');
   window.__street = { THREE, simulate: (seconds) => { for (let i = 0, n = seconds * 60; i < n; i++) movePlayer(1 / 60); }, setYaw: (v) => { yaw = v; }, get yaw() { return yaw; }, get pitch() { return pitch; }, sectionPoint, get autopilot() { return !!autopilot; }, composer, gtao, goto, setTime, applyDesign, DESIGNS, placePlayer, player, velocity, keys, scene, camera, stations, walls, bays, shared, setTarget: (t) => { target = t; }, get fps() { return fps.value; }, tap, arrowGo, get onFloor() { return onFloor; }, ready: true };
   clock.getDelta();
-  frame(performance.now());
+  requestAnimationFrame(frame);
   window.streetReady();
   $('loader').classList.add('done');
   mark('первый кадр');
-  if (!lite && (!compact || params.has('cars')) && !params.has('no-cars')) load('sedan').then((sedan) => {
+  if (!lite && !params.has('no-cars')) load('sedan').then((sedan) => {
     spawnTraffic(sedan);
     moveTraffic(0);
   }).catch((error) => console.warn('Не удалось загрузить машины', error));
@@ -739,4 +767,4 @@ async function start() {
     if (params.has('bake')) window.__bake = () => bakeTree(tree);
   }).catch(() => {});
 }
-start().catch((error) => { console.error(error); window.streetFallback(); });
+start().catch((error) => { $('load-text').textContent = 'Не удалось запустить сцену: ' + error.message; console.error(error); });

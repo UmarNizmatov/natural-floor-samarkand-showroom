@@ -3,28 +3,47 @@ import * as THREE from 'three';
 
 const loader = new THREE.TextureLoader();
 export const isPhone = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0 || /Android|iPhone|iPad/.test(navigator.userAgent);
-const quality = new URLSearchParams(location.search);
-const hasCrashed = () => {
-  try { return sessionStorage.getItem('street-crashed') === '1'; } catch { return false; }
-};
-export const compact = hasCrashed() || quality.has('lite') || quality.get('q') === 'low' || (isPhone && quality.get('q') !== 'high');
-const texDir = compact ? 'assets/tex/lo' : 'assets/tex/hi';
-
+const texDir = 'assets/tex/hi';
+const pendingTextures = new Map();
+const imageLoads = new Map();
+export function loadMaterialTextures(material) {
+  return Promise.all((Array.isArray(material) ? material : [material]).flatMap((m) =>
+    ['map', 'normalMap', 'roughnessMap'].map((key) => pendingTextures.get(m[key])?.())
+  ));
+}
+function deferredTexture(url) {
+  const texture = new THREE.Texture();
+  let promise;
+  pendingTextures.set(texture, () => {
+    if (!promise) {
+      if (!imageLoads.has(url)) imageLoads.set(url, loader.loadAsync(url).catch((error) => {
+        imageLoads.delete(url);
+        throw error;
+      }));
+      promise = imageLoads.get(url).then((loaded) => {
+      texture.image = loaded.image;
+      texture.needsUpdate = true;
+    }).catch((error) => { promise = null; throw error; });
+    }
+    return promise;
+  });
+  return texture;
+}
 export function pbr(name, { repeat = 1, color, roughness = 1, metalness = 0, normalScale = 1, anisotropy = 8, rough = true } = {}) {
   const prep = (texture, srgb) => {
     texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
     texture.repeat.set(repeat, repeat);
-    texture.anisotropy = compact ? Math.min(2, anisotropy) : anisotropy;
+    texture.anisotropy = anisotropy;
     if (srgb) texture.colorSpace = THREE.SRGBColorSpace;
     return texture;
   };
   const material = new THREE.MeshStandardMaterial({
-    map: prep(loader.load(`${texDir}/${name}_diff.webp`), true),
-    normalMap: compact ? null : prep(loader.load(`${texDir}/${name}_nor.webp`)),
+    map: prep(deferredTexture(`${texDir}/${name}_diff.webp`), true),
+    normalMap: prep(deferredTexture(`${texDir}/${name}_nor.webp`)),
     roughness, metalness,
     normalScale: new THREE.Vector2(normalScale, normalScale),
   });
-  if (rough && !compact) material.roughnessMap = prep(loader.load(`${texDir}/${name}_rough.webp`));
+  if (rough) material.roughnessMap = prep(deferredTexture(`${texDir}/${name}_rough.webp`));
   if (color) material.color.set(color);
   return material;
 }
@@ -60,7 +79,7 @@ const canvas2 = (size, h = size) => { const c = document.createElement('canvas')
 
 // Herringbone concrete pavers, as on the real sidewalk. The tile covers tileMetres.
 export function paverMaterial(base, { tileMetres = 2.4, anisotropy } = {}) {
-  const size = compact ? 256 : 1024, color = canvas2(size), height = canvas2(size);
+  const size = 1024, color = canvas2(size), height = canvas2(size);
   const c = color.getContext('2d'), z = height.getContext('2d');
   c.fillStyle = `rgb(${base[0]*.55},${base[1]*.55},${base[2]*.55})`; c.fillRect(0, 0, size, size);
   z.fillStyle = '#000'; z.fillRect(0, 0, size, size);
@@ -80,16 +99,16 @@ export function paverMaterial(base, { tileMetres = 2.4, anisotropy } = {}) {
     block(px, py, u * 2, u); block(px + u * 2, py, u, u * 2);
   }
   // Fine concrete speckle.
-  for (let n = 0; n < (compact ? 1600 : 26000); n++) {
+  for (let n = 0; n < 26000; n++) {
     const a = Math.random() * .1;
     c.fillStyle = Math.random() > .5 ? `rgba(255,255,255,${a})` : `rgba(0,0,0,${a})`;
     c.fillRect(Math.random() * size, Math.random() * size, 1.4, 1.4);
   }
-  return new THREE.MeshStandardMaterial({ map: texture(color, true, anisotropy), normalMap: compact ? null : texture(normalFromHeight(height, 1.1), false, anisotropy), roughness: .86, vertexColors: false });
+  return new THREE.MeshStandardMaterial({ map: texture(color, true, anisotropy), normalMap: texture(normalFromHeight(height, 1.1), false, anisotropy), roughness: .86, vertexColors: false });
 }
 
 export function tactileMaterial() {
-  const size = compact ? 128 : 512, color = canvas2(size), height = canvas2(size);
+  const size = 512, color = canvas2(size), height = canvas2(size);
   const c = color.getContext('2d'), z = height.getContext('2d');
   c.fillStyle = '#a98a3e'; c.fillRect(0, 0, size, size);
   z.fillStyle = '#333'; z.fillRect(0, 0, size, size);
@@ -100,12 +119,12 @@ export function tactileMaterial() {
     z.fillStyle = '#fff'; z.beginPath(); z.arc(x, y, u * .3, 0, 7); z.fill();
   }
   c.strokeStyle = '#6f5a2b'; c.lineWidth = 2; c.strokeRect(0, 0, size, size);
-  return new THREE.MeshStandardMaterial({ map: texture(color, true), normalMap: compact ? null : texture(normalFromHeight(height, 3)), roughness: .75 });
+  return new THREE.MeshStandardMaterial({ map: texture(color, true), normalMap: texture(normalFromHeight(height, 3)), roughness: .75 });
 }
 
 // The black and white stepped zigzag of the real tiled slopes. U runs along the road (6 m), V up the slope.
 export function slopeMaterial(accent = false) {
-  const w = compact ? 512 : 2048, h = w / 2, color = canvas2(w, h), height = canvas2(w, h);
+  const w = 2048, h = 1024, color = canvas2(w, h), height = canvas2(w, h);
   const c = color.getContext('2d'), z = height.getContext('2d');
   z.fillStyle = '#fff'; z.fillRect(0, 0, w, h);
   const rows = 12, cols = 16, rowH = h / rows, colW = w / cols;
@@ -122,15 +141,15 @@ export function slopeMaterial(accent = false) {
       z.strokeStyle = '#000'; z.lineWidth = 3; z.strokeRect(col * colW, r * rowH, colW, rowH);
     }
   }
-  return new THREE.MeshStandardMaterial({ map: texture(color, true, 16), normalMap: compact ? null : texture(normalFromHeight(height, 1.2), false, 16), roughness: .7 });
+  return new THREE.MeshStandardMaterial({ map: texture(color, true, 16), normalMap: texture(normalFromHeight(height, 1.2), false, 16), roughness: .7 });
 }
 
 // Laser-cut girih panels like the real parapet railing.
 export function girihPanelMaterial() {
-  const w = compact ? 256 : 1024, h = w / 2, c = canvas2(w, h), g = c.getContext('2d');
+  const w = 1024, h = 512, c = canvas2(w, h), g = c.getContext('2d');
   g.fillStyle = '#2f3336'; g.fillRect(0, 0, w, h);
   g.globalCompositeOperation = 'destination-out';
-  const cell = w / 8;
+  const cell = 128;
   for (let y = 0; y < h; y += cell) for (let x = 0; x < w; x += cell) {
     const cx = x + cell / 2, cy = y + cell / 2;
     g.beginPath();
@@ -154,7 +173,6 @@ export function girihPanelMaterial() {
 
 // Stone grain: tiled normal and luminance detail added on top of the painted design.
 export function stoneDetail() {
-  if (compact) return { normal: null, grain: null };
   const size = 512, height = canvas2(size), g = height.getContext('2d');
   g.fillStyle = '#222'; g.fillRect(0, 0, size, size);
   for (let i = 0; i < 5200; i++) {
@@ -176,13 +194,14 @@ export function stoneDetail() {
 export function wallMaterial(detail, shared) {
   const material = new THREE.MeshStandardMaterial({ roughness: .96, normalMap: detail.normal, normalScale: new THREE.Vector2(.55, .55) });
   material.onBeforeCompile = (shader) => {
-    if (detail.grain) shader.uniforms.grainMap = { value: detail.grain };
+    shader.uniforms.grainMap = { value: detail.grain };
     shader.uniforms.washStrength = shared.washStrength;
     shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vGrainUv;varying float vWallV;')
-      .replace('#include <uv_vertex>', `#include <uv_vertex>\n${detail.grain ? 'vGrainUv=uv1;' : ''}vWallV=uv.y;`);
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvGrainUv=uv1;vWallV=uv.y;');
     shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\nuniform sampler2D grainMap;uniform float washStrength;varying vec2 vGrainUv;varying float vWallV;')
       .replace('#include <map_fragment>', `#include <map_fragment>
-        ${detail.grain ? 'float grain=texture2D(grainMap,vGrainUv).r; diffuseColor.rgb*=mix(.86,1.1,grain);' : ''}`)
+        float grain=texture2D(grainMap,vGrainUv).r;
+        diffuseColor.rgb*=mix(.86,1.1,grain);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance+=diffuseColor.rgb*washStrength*(pow(1.-clamp(vWallV,0.,1.),1.6)*1.5+.08)*vec3(1.,.86,.66);`);
   };

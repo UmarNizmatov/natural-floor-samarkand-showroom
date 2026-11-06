@@ -4,21 +4,11 @@ import { WORD } from './word.js';
 
 const STONE_NAMES = ['Grafit', 'Arktika', 'Kanyon', 'Safari', 'Rubin', 'Saxro', 'Zumrad', 'Koksaroy', 'Novvot', 'Terra', 'Marvarid', 'BlackCoffee',
   'Bodom', 'Soxil', 'Riverstone', 'Mozayka', 'Nurtosh', 'Bahor', 'Chashma', 'Galaktika', 'Zarafshon', 'Xazon', 'Anor', 'Terrachcho', 'Panda', 'Zamin', 'Safed'];
-// Average colors of the catalog samples for the low-memory renderer.
-const stoneColors = {
-  Anor: '#C2B7AF', Arktika: '#B9ACB0', Bahor: '#827353', BlackCoffee: '#242627',
-  Bodom: '#5F3F23', Chashma: '#887152', Galaktika: '#605340', Grafit: '#74736D',
-  Kanyon: '#6C4B36', Koksaroy: '#4C4C46', Marvarid: '#908675', Mozayka: '#615B52',
-  Novvot: '#C49870', Nurtosh: '#716049', Panda: '#6C6A63', Riverstone: '#8A8073',
-  Rubin: '#914A42', Safari: '#A4743D', Safed: '#868172', Saxro: '#A3764C',
-  Soxil: '#584F45', Terra: '#664C3B', Terrachcho: '#746857', Xazon: '#90785E',
-  Zamin: '#68503D', Zarafshon: '#685D4E', Zumrad: '#737C66',
-};
 const images = {};
-export const loadStones = () => Promise.all(STONE_NAMES.map((name) => new Promise((resolve) => {
+export const loadStones = () => Promise.all(STONE_NAMES.map((name) => new Promise((resolve, reject) => {
   const image = new Image();
   image.onload = () => { images[name] = image; resolve(); };
-  image.onerror = resolve;
+  image.onerror = reject;
   image.src = `assets/stone/${name}.jpg`;
 })));
 
@@ -26,7 +16,6 @@ const STONE_TILE_METRES = 0.3;
 function brush(ctx) {
   const cache = {};
   return (name) => {
-    if (!images[name]) return stoneColors[name];
     if (!cache[name]) {
       const pattern = ctx.createPattern(images[name], 'repeat');
       pattern.setTransform(new DOMMatrix().scale(STONE_TILE_METRES / 512));

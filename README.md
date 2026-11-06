@@ -1,11 +1,11 @@
-# Natural Floor showroom
+# Natural Floor — прогулка по объекту в Самарканде
 
-78 original vector compositions, two modeled facades, mobile walkthrough.
+Первый вариант 3D-прогулки Claude. В сцене можно пройти вдоль стен, переключить дизайн каменного ковра и выбрать время суток.
 
-No original photos, private Telegram export, chat text, voices or local configuration are included. All facade textures are rendered from authored SVG primitives.
+Готовая сборка лежит в `public`. Для локального просмотра запустите из корня репозитория:
 
-Geometries and dimensions are approximate.
+    python3 -m http.server 8795 --bind 127.0.0.1 --directory public
 
-Dependencies: Three.js (MIT), nipplejs (MIT), Golos font (OFL). License notices: assets/.
+Откройте http://127.0.0.1:8795. Для пересборки после изменения `src` выполните `npm ci` и `npm run build`.
 
-Facade motifs are triangulated from SVG into vector geometry (including tessellation along the curved wall), not photographic textures. Multisample antialiasing and a device pixel ratio up to 2 preserve edge clarity.
+Мобильное управление проверялось с эмуляцией касаний. Известные дефекты этой версии — артефакты у деревьев и куст над землёй у ступенчатой стены.

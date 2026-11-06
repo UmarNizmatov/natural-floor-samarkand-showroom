@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#14181c">
+<title>Самарканд, 3D-прогулка</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="stage"></div>
+<div id="loader"><div class="ring"></div><p id="load-text">Загрузка</p></div>
+
+<header class="brand"><strong>Natural Floor</strong><span>Каменный ковёр на стенах, Самарканд</span></header>
+
+<div class="tools">
+  <div class="seg" role="group" aria-label="Время суток">
+    <button type="button" data-time="day" aria-pressed="true">День</button>
+    <button type="button" data-time="sunset" aria-pressed="false">Закат</button>
+    <button type="button" data-time="night" aria-pressed="false">Ночь</button>
+  </div>
+  <button type="button" id="open-route" class="pill">Маршрут</button>
+</div>
+
+<p id="hint"><span id="hint-text"></span></p>
+<p id="fps"></p>
+<button id="jump" type="button" aria-label="Прыжок">
+  <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V6"/><path d="M6 11l6-6 6 6"/></svg>
+</button>
+
+<section class="panel" aria-label="Дизайны">
+  <div class="panel-head">
+    <div class="titles"><h1 id="design-title"></h1><p id="design-hint"></p></div>
+    <button type="button" id="assembly" class="accent" hidden>К точке сборки</button>
+    <button type="button" id="toggle" class="icon" aria-label="Свернуть панель">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  </div>
+  <div class="foldable">
+    <div class="seg targets" role="group" aria-label="На какие стены">
+      <button type="button" data-target="all" aria-pressed="true">Все</button>
+      <button type="button" data-target="low" aria-pressed="false">Длинная</button>
+      <button type="button" data-target="high" aria-pressed="false">Высокая</button>
+      <button type="button" data-target="step" aria-pressed="false">Ступенчатая</button>
+      <button type="button" data-target="bays" aria-pressed="false">Откосы</button>
+    </div>
+    <div id="cards"></div>
+  </div>
+</section>
+
+<dialog id="route">
+  <form method="dialog"><h2>Куда перейти</h2>
+    <button type="button" data-go="low">Длинная стена, 338,70 м²</button>
+    <button type="button" data-go="high">Высокая стена, 288,94 м²</button>
+    <button type="button" data-go="step">Ступенчатая стена, 43,22 м²</button>
+    <button type="button" data-go="zone68">Откос, 68 м²</button>
+    <button type="button" data-go="zone52">Откос, 52 м²</button>
+    <button type="button" data-go="road">Середина дороги</button>
+    <button class="close">Закрыть</button>
+  </form>
+</dialog>
+<script type="module" src="app.js"></script>
+</body>
+</html>

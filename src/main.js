@@ -1,10 +1,7 @@
 // Runtime: renderer, light, player physics, traffic and interface.
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
-import { Octree } from 'three/examples/jsm/math/Octree.js';
 import { Capsule } from 'three/examples/jsm/math/Capsule.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
@@ -14,18 +11,15 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { SMAAPass } from 'three/examples/jsm/postprocessing/SMAAPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { stations, station, walls, bays, across, ROAD } from './site.js';
-import { buildWorld, paintAllWalls, plantVegetation, sectionPoint, NO_AMBIENT_OCCLUSION } from './world.js';
-import { DESIGNS, loadStones, paintDesign } from './designs.js';
-import { loadMaterialTextures, isPhone } from './materials.js';
-import { distanceCuller } from './culling.js';
+import { paintAllWalls, sectionPoint, NO_AMBIENT_OCCLUSION } from './world.js';
+import { loadPreparedWorld } from './prepared-world.js';
+import { DESIGNS } from './designs.js';
+import { isPhone } from './materials.js';
 import { createBirds } from './birds.js';
 
 const params = new URLSearchParams(location.search);
 const touch = isPhone;
-// Each lost GPU context restarts the page one quality level lower instead of leaving a dead screen.
-const readCrashes = () => { try { return Number(sessionStorage.getItem('street-crashes')) || 0; } catch { return 0; } };
-const crashes = readCrashes();
-const lite = crashes >= 1 || params.has('lite');
+const lite = params.has('lite');
 const tier = params.get('q') === 'low' ? 'low' : 'high';
 const $ = (id) => document.getElementById(id);
 
@@ -36,18 +30,13 @@ try {
   $('load-text').textContent = 'Браузер не смог запустить 3D. Закройте лишние вкладки и обновите страницу.';
   throw error;
 }
-// A phone can drop the 3D context when it runs short of memory: say so instead of freezing.
 renderer.domElement.addEventListener('webglcontextlost', (event) => {
   event.preventDefault();
   $('loader').classList.remove('done');
-  if (crashes < 2) {
-    $('load-text').textContent = 'Перезапускаем в лёгком режиме';
-    try { sessionStorage.setItem('street-crashes', String(crashes + 1)); } catch { /* private mode: reload once anyway */ }
-    setTimeout(() => location.reload(), 600);
-  } else {
-    $('load-text').textContent = 'Этому устройству не хватает памяти для 3D. Закройте лишние вкладки и обновите страницу.';
-    document.querySelector('.ring').style.display = 'none';
-  }
+  $('load-text').textContent = 'Восстанавливаем 3D. Можно открыть маршрут без 3D.';
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  if (window.__street?.ready) $('loader').classList.add('done');
 });
 renderer.setPixelRatio(Math.min(devicePixelRatio, lite ? 1 : tier === 'high' ? 1.6 : 1.25));
 renderer.setSize(innerWidth, innerHeight);
@@ -74,7 +63,7 @@ sun.shadow.bias = -.00025; sun.shadow.normalBias = .035;
 scene.add(sun, sun.target);
 scene.fog = new THREE.FogExp2('#c7d0d8', .0021);
 
-let composer = null, gtao = null, bloom = null;
+let photoGrade = null, composer = null, gtao = null, bloom = null;
 function setupComposer() {
   const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
   composer = new EffectComposer(renderer, target);
@@ -100,6 +89,22 @@ function setupComposer() {
   bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), .1, .55, 1.15);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
+  // Camera look: gentle contrast, slightly muted colour, soft vignette and sensor grain, like the site photos.
+  photoGrade = new ShaderPass({
+    uniforms: { tDiffuse: { value: null }, tick: { value: 0 }, texel: { value: new THREE.Vector2(1 / innerWidth, 1 / innerHeight) } },
+    vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0.,1.);}',
+    fragmentShader: `uniform sampler2D tDiffuse;uniform float tick;uniform vec2 texel;varying vec2 vUv;
+      float noise(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233))+tick)*43758.5453);}
+      void main(){vec3 c=texture2D(tDiffuse,vUv).rgb;
+        vec3 ring=texture2D(tDiffuse,vUv+vec2(texel.x,0.)).rgb+texture2D(tDiffuse,vUv-vec2(texel.x,0.)).rgb+texture2D(tDiffuse,vUv+vec2(0.,texel.y)).rgb+texture2D(tDiffuse,vUv-vec2(0.,texel.y)).rgb;
+        c=clamp(c+(c-ring*.25)*.55,0.,1.);
+        c=mix(c,c*c*(3.-2.*c),.42);
+        float l=dot(c,vec3(.299,.587,.114));c=mix(vec3(l),c,.94)*vec3(1.025,1.,.955);
+        vec2 d=vUv-.5;c*=1.-dot(d,d)*.34;
+        c+=(noise(vUv*vec2(1920.,1080.))-.5)*.016;
+        gl_FragColor=vec4(c,1.);}`,
+  });
+  composer.addPass(photoGrade);
   composer.addPass(new SMAAPass());
 }
 if (tier === 'high') setupComposer();
@@ -108,9 +113,13 @@ if (tier === 'high') setupComposer();
 const hdr = new HDRLoader();
 const pmrem = new THREE.PMREMGenerator(renderer);
 const skies = {};
+// Light comes from a small HDR map, the visible sky from a compressed picture stored with this brightness factor.
+const SKY_SCALE = {"belfast_sunset_puresky": 0.0696, "kloofendal_overcast_puresky": 0.2807, "kloppenheim_02_puresky": 0.7191, "kloofendal_48d_partly_cloudy_puresky": 0.3299};
 async function loadSky(name) {
   if (skies[name]) return skies[name];
-  const texture = await hdr.loadAsync(`assets/hdr/${name}.hdr`);
+  const [texture, backdrop] = await Promise.all([hdr.loadAsync(`assets/sky/${name}.hdr`), new THREE.TextureLoader().loadAsync(`assets/sky/${name}.webp`)]);
+  backdrop.mapping = THREE.EquirectangularReflectionMapping;
+  backdrop.colorSpace = THREE.SRGBColorSpace;
   texture.mapping = THREE.EquirectangularReflectionMapping;
   const { width: w, height: h, data } = texture.image;
   let best = -1, bx = 0, by = 0;
@@ -120,11 +129,13 @@ async function loadSky(name) {
   }
   const azimuth = (bx / w) * Math.PI * 2, elevation = (.5 - by / h) * Math.PI;
   const environment = pmrem.fromEquirectangular(texture).texture;
-  return (skies[name] = { texture, environment, azimuth, elevation });
+  texture.dispose();
+  return (skies[name] = { backdrop, environment, azimuth, elevation, intensity: 1 / SKY_SCALE[name] });
 }
 const TIMES = {
-  day: { sky: 'kloofendal_48d_partly_cloudy_puresky', sun: 3.5, sunColor: '#fff1dc', env: 1, bg: 1, exposure: 1.2, fog: '#cfd8df', density: .0019, wash: 0, lamp: 0, pool: 0, win: 0, bloom: .06, elev: .95, azim: 2.5, skyline: '#ffffff' },
-  sunset: { sky: 'belfast_sunset_puresky', sun: 2.9, sunColor: '#ffb36b', env: .95, bg: .72, exposure: .9, fog: '#b98f79', density: .0006, wash: .12, lamp: 1.2, pool: .25, win: .35, bloom: .06, elev: .17, azim: 2.1, skyline: '#e6b394' },
+  overcast: { sky: 'kloofendal_overcast_puresky', sun: .5, sunColor: '#f0e8dc', env: 1.05, bg: .6, exposure: .92, fog: '#c8cbcd', density: .0016, wash: 0, lamp: 0, pool: 0, win: 0, bloom: .04, elev: .9, azim: 2.5, skyline: '#e4e6e6' },
+  day: { sky: 'kloofendal_48d_partly_cloudy_puresky', sun: 2.5, sunColor: '#fff1dc', env: .9, bg: .95, exposure: .88, fog: '#cfd8df', density: .0019, wash: 0, lamp: 0, pool: 0, win: 0, bloom: .06, elev: .95, azim: 2.5, skyline: '#ffffff' },
+  sunset: { sky: 'belfast_sunset_puresky', sun: 2.9, sunColor: '#ffb36b', env: .9, bg: .5, exposure: .78, fog: '#b98f79', density: .0006, wash: .12, lamp: 1.2, pool: .25, win: .35, bloom: .06, elev: .17, azim: 2.1, skyline: '#e6b394' },
   night: { sky: 'kloppenheim_02_puresky', sun: .16, sunColor: '#a9c0ff', env: .2, bg: .1, exposure: 1.5, fog: '#141a26', density: .0026, wash: .9, lamp: 7, pool: .55, win: 1.3, bloom: .22, elev: .8, azim: 2.8, skyline: '#27303f' },
 };
 const lampLights = Array.from({ length: lite ? 0 : tier === 'high' ? 8 : 3 }, () => { const l = new THREE.PointLight('#ffd7a6', 0, 34, 1.7); l.visible = false; scene.add(l); return l; });
@@ -144,23 +155,23 @@ let currentTime = 'day', sunDirection = new THREE.Vector3(1, 1, 0);
 let shared, carLights = [], birds = null;
 async function setTime(name) {
   currentTime = name;
-  settleUntil = performance.now() + 6000;
   document.querySelectorAll('[data-time]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.time === name)));
   const t = TIMES[name], sky = await loadSky(t.sky);
   if (currentTime !== name) return;
-  scene.background = sky.sharp || sky.texture;
+  scene.background = sky.backdrop;
   scene.environment = sky.environment;
   // Rotate the sky so its sun falls where the walls show their relief best.
   const rotation = sky.azimuth - t.azim;
   scene.backgroundRotation.y = scene.environmentRotation.y = rotation;
-  scene.backgroundIntensity = t.bg; scene.environmentIntensity = t.env;
+  scene.backgroundIntensity = t.bg * sky.intensity; scene.environmentIntensity = t.env;
+  shadowDirty = true; settleUntil = performance.now() + 6000;
   sunDirection.setFromSphericalCoords(1, Math.PI / 2 - Math.max(sky.elevation, t.elev), t.azim + Math.PI / 2);
   sun.intensity = t.sun; sun.color.set(t.sunColor);
   renderer.toneMappingExposure = t.exposure;
   scene.fog.color.set(t.fog); scene.fog.density = t.density * (tier === 'high' ? 1 : 1.6);
   shared.washStrength.value = t.wash;
   shared.lampMaterial.emissiveIntensity = t.lamp;
-  lampPower = name === 'night' ? 240 : name === 'sunset' ? 34 : 0; lampTick = 0;
+  lampPower = name === 'night' ? 110 : name === 'sunset' ? 34 : 0; lampTick = 0;
   lampLights.forEach((l) => { l.visible = lampPower > 0; });
   shared.pool.opacity = t.pool;
   shared.windows.emissiveIntensity = t.win;
@@ -171,7 +182,7 @@ async function setTime(name) {
 }
 
 // Player physics --------------------------------------------------------------------------------
-const worldOctree = new Octree();
+let worldOctree = null;
 const GRAVITY = 16, EYE = 1.62, RADIUS = .32, JUMP = 5.4, WALK = 3.1, RUN = 6.4;
 const player = new Capsule(new THREE.Vector3(), new THREE.Vector3(0, EYE - RADIUS, 0), RADIUS);
 const velocity = new THREE.Vector3();
@@ -179,7 +190,51 @@ let onFloor = false, yaw = 0, pitch = 0, fovTarget = 68;
 const keys = {};
 let autopilot = null;
 
+// Phone: fixed viewpoints along the street, like Street View. Arrows glide between them, nothing else moves the camera.
+const railMode = touch;
+let railNodes = [], railIndex = 0, railFrom = 0, railAt = 1;
+const railEye = new THREE.Vector3();
+function buildRail() {
+  const c = walls.step.curve, e = c[c.length - 1], f = c[0], l = Math.hypot(f.x - e.x, f.z - e.z), ux = (f.x - e.x) / l, uz = (f.z - e.z) / l, vx = uz, vz = -ux;
+  const nodes = [[e.x + ux * 7 + vx * 6, e.base + .12, e.z + uz * 7 + vz * 6], [e.x - ux * 3 + vx * 6.5, e.base + .1, e.z - uz * 3 + vz * 6.5]];
+  for (let Y = 1856; Y <= 2112; Y += 10) { const s = station(Y); nodes.push(sectionPoint(s, s.width - ROAD.SIDEWALK - ROAD.LANE * .5)); }
+  railNodes = nodes.map(([x, y, z]) => new THREE.Vector3(x, y + EYE, z));
+}
+const railDirection = (i) => railNodes[Math.min(railNodes.length - 1, i + 1)].clone().sub(railNodes[Math.max(0, i - 1)]).setY(0).normalize();
+function updateWalkButtons() {
+  const ahead = -Math.sin(yaw) * railDirection(railIndex).x - Math.cos(yaw) * railDirection(railIndex).z >= 0 ? 1 : -1;
+  document.querySelector('[data-walk=forward]')?.toggleAttribute('disabled', !railNodes[railIndex + ahead]);
+  document.querySelector('[data-walk=back]')?.toggleAttribute('disabled', !railNodes[railIndex - ahead]);
+}
+// Forward means the way the camera looks, as in Street View.
+function stepAlongRail(kind) {
+  const direction = railDirection(railIndex);
+  const ahead = -Math.sin(yaw) * direction.x - Math.cos(yaw) * direction.z >= 0 ? 1 : -1;
+  const next = railIndex + (kind === 'forward' ? ahead : -ahead);
+  if (!railNodes[next]) return;
+  railEye.copy(camera.position);
+  railIndex = next; railAt = 0;
+}
+function moveAlongRail(dt) {
+  forward.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+  railAt = Math.min(1, railAt + dt / .7);
+  const t = railAt * railAt * (3 - 2 * railAt);
+  camera.position.lerpVectors(railEye, railNodes[railIndex], t);
+  player.end.copy(camera.position); player.start.copy(camera.position).setY(camera.position.y - EYE + RADIUS);
+  onFloor = true;
+  camera.rotation.set(pitch, yaw, 0);
+  if (Math.abs(camera.fov - fovTarget) > .05) { camera.fov += (fovTarget - camera.fov) * Math.min(1, dt * 7); camera.updateProjectionMatrix(); }
+  updateWalkButtons();
+}
+
 function placePlayer(x, y, z, lookX, lookY, lookZ) {
+  if (railMode) {
+    railNodes.forEach((n, i) => { if (Math.hypot(n.x - x, n.z - z) < Math.hypot(railNodes[railIndex].x - x, railNodes[railIndex].z - z)) railIndex = i; });
+    railEye.copy(railNodes[railIndex]); railAt = 1; camera.position.copy(railEye);
+    if (lookX !== undefined) { const dx = lookX - railEye.x, dy = lookY - railEye.y, dz = lookZ - railEye.z; yaw = Math.atan2(-dx, -dz); pitch = Math.atan2(dy, Math.hypot(dx, dz)); }
+    moveAlongRail(0);
+    return;
+  }
   player.start.set(x, y + RADIUS + .02, z); player.end.set(x, y + EYE - RADIUS + .22, z);
   player.radius = RADIUS;
   velocity.set(0, 0, 0); autopilot = null;
@@ -226,7 +281,9 @@ function movePlayer(dt) {
   if ((keys.Space || keys.jump) && onFloor) { velocity.y = JUMP; onFloor = false; }
   keys.jump = false;
   if (!onFloor) velocity.y -= GRAVITY * dt;
-  player.translate(velocity.clone().multiplyScalar(dt));
+  const step = velocity.clone().multiplyScalar(dt);
+  if (shared.chunkReady && !shared.chunkReady(player.end.clone().add(step))) { step.x = 0; step.z = 0; }
+  player.translate(step);
   collide();
   keepInWorld(dt);
   camera.position.copy(player.end);
@@ -374,7 +431,8 @@ function roadFrame() {
   return { s, tx: (cb[0] - ca[0]) / l, tz: (cb[2] - ca[2]) / l };
 }
 function updateArrows() {
-  if (!touch && !params.has('arrows')) { arrows.forEach((a) => { a.visible = false; }); return; }
+  arrows.forEach((a) => { a.visible = false; });
+  if (true) return;
   const { s, tx, tz } = roadFrame();
   const feet = player.start.y - RADIUS + .06;
   const dirs = { forward: [tx, tz], back: [-tx, -tz] };
@@ -433,7 +491,6 @@ addEventListener('keydown', (e) => {
   if (e.code === 'KeyE' || e.code === 'BracketRight') applyDesign(DESIGNS[(DESIGNS.indexOf(activeDesign) + 1) % DESIGNS.length]);
   if (e.code === 'KeyQ' || e.code === 'BracketLeft') applyDesign(DESIGNS[(DESIGNS.indexOf(activeDesign) - 1 + DESIGNS.length) % DESIGNS.length]);
   if (e.code === 'KeyT') { const order = Object.keys(TIMES); setTime(order[(order.indexOf(currentTime) + 1) % order.length]); }
-  if (e.code === 'KeyM') { const r = $('route'); if (r.open) r.close(); else r.showModal(); }
   if (e.code === 'KeyH') document.body.classList.toggle('collapsed');
   if (/^Digit[1-9]$/.test(e.code)) { const d = DESIGNS[Number(e.code[5]) - 1]; if (d) applyDesign(d); }
 });
@@ -472,13 +529,7 @@ if (touch || params.has('arrows')) {
   canvas.addEventListener('pointercancel', (e) => { pointers.delete(e.pointerId); pinch = 0; tapStart = null; });
 }
 const ray = new THREE.Raycaster();
-function tap(x, y) {
-  ray.setFromCamera({ x: x / innerWidth * 2 - 1, y: -(y / innerHeight) * 2 + 1 }, camera);
-  const on = worldOctree.rayIntersect(ray.ray);
-  const hit = ray.intersectObjects(arrows.filter((arrow) => arrow.visible), true)[0];
-  if (hit && (!on || hit.distance <= on.distance + .1)) { arrowGo(hit.object.userData.kind); return; }
-  if (on && on.distance < 90 && on.position && on.triangle.getNormal(new THREE.Vector3()).y > .3) walkTo(on.position.x, on.position.z);
-}
+function tap() {}
 
 // Interface -------------------------------------------------------------------------------------
 const wallDesigns = new Map();
@@ -506,12 +557,11 @@ function syncDesignPanel() {
   $('assembly').hidden = !spots.length;
   $('assembly').onclick = () => {
     const spot = spots[assemblyIndex++ % spots.length];
-    placePlayer(spot.eye.x, spot.eye.y - EYE, spot.eye.z, spot.eye.x + spot.look.x * 20, spot.eye.y + spot.look.y * 20, spot.eye.z + spot.look.z * 20);
+    moveToLocation([spot.eye.x, spot.eye.y - EYE, spot.eye.z], [spot.eye.x + spot.look.x * 20, spot.eye.y + spot.look.y * 20, spot.eye.z + spot.look.z * 20]);
   };
 }
 function applyDesign(design) {
   activeDesign = design;
-  settleUntil = performance.now() + 5000;
   const list = targetWalls();
   list.forEach((wall) => wallDesigns.set(wall, design));
   paintAllWalls(list, design, tier, !shared.started);
@@ -520,18 +570,16 @@ function applyDesign(design) {
   shared.viewMarkers.forEach((marker, index) => { marker.visible = spots.includes(shared.viewpoints[index]); });
 }
 function buildCards() {
-  const list = $('cards'), thumbs = [];
+  const list = $('cards');
   DESIGNS.forEach((design) => {
     const card = document.createElement('button'); card.className = 'card'; card.dataset.id = design.id; card.type = 'button';
-    const thumb = document.createElement('canvas'); thumb.width = 280; thumb.height = 88;
-    thumbs.push(() => paintDesign(thumb.getContext('2d'), design, { L: 28, H: 8.8, pxPerMetre: 10, seed: 3 }));
+    const thumb = document.createElement('img'); thumb.width = 280; thumb.height = 88; thumb.alt = ''; thumb.loading = 'lazy'; thumb.src = shared.thumbnails[design.id];
     const label = document.createElement('span'); label.textContent = design.title;
     card.append(thumb, label);
     card.onclick = () => { applyDesign(design); renderSoon(); };
     list.append(card);
   });
-  const paintNext = () => { const job = thumbs.shift(); if (job) { job(); setTimeout(paintNext, 16); } };
-  setTimeout(paintNext, 400);
+
 }
 const renderSoon = () => {};
 function oppositeView(point, west, offset = 0) {
@@ -541,8 +589,9 @@ function oppositeView(point, west, offset = 0) {
 function bayView(id) {
   const bay = bays[id];
   const geometry = bay.segments[0].mesh.geometry;
-  geometry.computeBoundingBox();
-  return oppositeView(geometry.boundingBox.getCenter(new THREE.Vector3()).toArray(), bay.side === 'west', id === 'zone52' ? 8 : 0);
+  const saved = bay.segments[0].bounds;
+  const box = saved ? new THREE.Box3(new THREE.Vector3().fromArray(saved[0]), new THREE.Vector3().fromArray(saved[1])) : geometry.boundingBox;
+  return oppositeView(box.getCenter(new THREE.Vector3()).toArray(), bay.side === 'west', id === 'zone52' ? 8 : 0);
 }
 const SPOTS = {
   low: () => { const s = station(1878), p = sectionPoint(s, s.width - 2.2), t = station(1915), l = across(t, .9); return [p, [l[0], l[1] + 2, l[2]]]; },
@@ -552,10 +601,23 @@ const SPOTS = {
   zone52: () => bayView('zone52'),
   road: () => { const s = station(1860), p = sectionPoint(s, s.width / 2), t = station(1960), l = across(t, .5); return [p, [l[0], l[1] + 2, l[2]]]; },
 };
+let locationRequest = 0;
+async function moveToLocation(p, look) {
+  const request = ++locationRequest;
+  $('stream-status').hidden = false;
+  try {
+    await shared.prepareLocation(new THREE.Vector3(p[0], p[1] + EYE, p[2]), new THREE.Vector3().fromArray(look));
+    if (request !== locationRequest) return;
+    placePlayer(p[0], p[1] + .05, p[2], look[0], look[1], look[2]);
+    $('stream-status').hidden = true;
+  } catch (error) {
+    $('stream-status').textContent = 'Не удалось загрузить участок. Попробуйте ещё раз.';
+    return;
+  }
+}
 function goto(name) {
-  const [p, l] = SPOTS[name]();
-  placePlayer(p[0], p[1] + .05, p[2], l[0], l[1], l[2]);
-  $('route').close?.();
+  const [p, look] = SPOTS[name]();
+  return moveToLocation(p, look);
 }
 function setupUI() {
   buildCards();
@@ -568,15 +630,12 @@ function setupUI() {
       document.querySelectorAll('[data-target]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
     };
   });
-  document.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => goto(b.dataset.go); });
-  $('open-route').onclick = () => $('route').showModal();
   $('toggle').onclick = () => document.body.classList.toggle('collapsed');
   document.querySelectorAll('[data-walk]').forEach((button) => {
-    button.onclick = () => { hideHint(); arrowGo(button.dataset.walk); };
+    button.onclick = () => { hideHint(); stepAlongRail(button.dataset.walk); };
   });
-  $('jump').onclick = () => { hideHint(); keys.jump = true; };
   if (touch) document.body.classList.add('touch');
-  $('hint-text').textContent = touch ? 'Свайп: осмотреться. Стрелка или касание по земле: идти. Кнопка: прыжок.' : 'Тяни мышью или стрелками: поворот. WASD: идти, Shift: бег, пробел: прыжок. Q и E: дизайн, T: время, M: маршрут.';
+  $('hint-text').textContent = touch ? 'Свайп: осмотреться. Стрелки: вперёд и назад.' : 'Тяни мышью или стрелками: поворот. WASD: идти, Shift: бег, пробел: прыжок. Q и E: дизайн, T: время.';
 }
 let assemblyIndex = 0;
 
@@ -600,6 +659,8 @@ function addViewMarkers() {
 // Main ------------------------------------------------------------------------------------------
 let lastSize = [innerWidth, innerHeight];
 function resize() {
+  // Lying sideways the phone has little height: keep the panel folded so the street stays in view.
+  if (touch) document.body.classList.toggle('collapsed', innerWidth > innerHeight);
   if (innerWidth === lastSize[0] && innerHeight === lastSize[1]) return;
   lastSize = [innerWidth, innerHeight];
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -614,20 +675,23 @@ visualViewport?.addEventListener('resize', resize);
 const clock = new THREE.Clock();
 const fps = { value: 60 };
 const snap = new THREE.Vector3();
-let shadowFrame = 0;
+// The street stands still, so its shadows are redrawn only when the shadowed area shifts or new parts appear.
+let shadowFrame = 0, shadowDirty = true;
+const shadowFocus = new THREE.Vector3(Infinity, 0, 0), shadowCheck = new THREE.Vector3();
 function followSun() {
-  if (++shadowFrame % (tier === 'high' ? 2 : 3)) return;
+  shadowCheck.copy(camera.position).addScaledVector(forward, shadowRange * .35);
+  const movingCars = carMatrices && ++shadowFrame % 2 === 0;
+  if (!shadowDirty && !movingCars && shadowCheck.distanceToSquared(shadowFocus) < 16) return;
+  shadowFocus.copy(shadowCheck); shadowDirty = false;
   const texel = (shadowRange * 2) / shadowSize;
-  const focus = camera.position.clone().addScaledVector(forward, shadowRange * .35);
-  snap.set(Math.round(focus.x / texel) * texel, Math.round(focus.y / texel) * texel, Math.round(focus.z / texel) * texel);
+  snap.set(Math.round(shadowCheck.x / texel) * texel, Math.round(shadowCheck.y / texel) * texel, Math.round(shadowCheck.z / texel) * texel);
   sun.target.position.copy(snap);
   sun.position.copy(snap).addScaledVector(sunDirection, 240);
   sun.shadow.needsUpdate = true;
 }
 // Keeps the frame rate up on weak devices by stepping quality down only when it is really needed.
-let cullTick = 0, cullWorld = () => {}, updateTrees = () => {};
-let qualityStep = 0, measureFrom = 0, measured = 0, slowWindows = 0, settleUntil = 9000;
-const setRatio = (ratio) => { renderer.setPixelRatio(ratio); composer?.setPixelRatio(ratio); };
+let cullTick = 0, updateTrees = () => {};
+let measureFrom = 0, measured = 0;
 function measure(now) {
   if (document.hidden) { measureFrom = 0; return; }
   if (!measureFrom) { measureFrom = now; measured = 0; return; }
@@ -635,19 +699,23 @@ function measure(now) {
   if (now - measureFrom < 2000) return;
   fps.value = measured * 1000 / (now - measureFrom);
   measureFrom = now; measured = 0;
-  slowWindows = fps.value < 34 ? slowWindows + 1 : 0;
 
-  if (params.has('fps')) $('fps').textContent = `${fps.value.toFixed(0)} fps, ${renderer.info.render.calls} вызовов, ${renderer.info.render.triangles} треуг., шаг ${qualityStep}`;
+  if (params.has('fps')) $('fps').textContent = `${fps.value.toFixed(0)} fps, ${renderer.info.render.calls} вызовов, ${renderer.info.render.triangles} треуг.`;
 }
+let restFlip = false, settleUntil = 0;
 function frame(now) {
+  // A resting phone camera only has birds to animate: half the frames, less heat and battery.
+  const resting = railMode && railAt >= 1 && !pointers.size && Math.abs(camera.fov - fovTarget) < .05 && now > settleUntil - 4000;
+  if (resting && (restFlip = !restFlip)) { requestAnimationFrame(frame); return; }
   const dt = Math.min(.05, clock.getDelta());
-  movePlayer(dt / 2); movePlayer(dt / 2);
+  if (railMode) moveAlongRail(dt); else { movePlayer(dt / 2); movePlayer(dt / 2); }
   moveTraffic(dt);
   birds?.update(dt, camera.position);
   updateLampLights(dt);
-  if ((cullTick -= dt) <= 0) { cullTick = .25; cullWorld(camera.position); updateTrees(camera.position); }
+  if ((cullTick -= dt) <= 0) { cullTick = .25; updateTrees(camera.position); }
   updateArrows();
   followSun();
+  if (photoGrade) photoGrade.uniforms.tick.value = now % 97;
   renderer.info.reset();
   streamVisibleScene();
   if (composer) composer.render(); else renderer.render(scene, camera);
@@ -667,45 +735,13 @@ function bakeTree(tree) {
   return r.domElement.toDataURL('image/png');
 }
 
-const streamFrustum = new THREE.Frustum();
-const streamMatrix = new THREE.Matrix4();
-const streamBounds = new THREE.Box3();
-const streamCenter = new THREE.Vector3();
-const streamed = new WeakMap();
-let streaming = 0, streamTick = 0;
-function streamVisibleScene(initial = false) {
-  if (!initial && performance.now() < streamTick) return;
+let streamTick = 0, loadedChunks = 0;
+function streamVisibleScene() {
+  if (performance.now() < streamTick) return;
   streamTick = performance.now() + 250;
-  camera.updateMatrixWorld();
-  streamFrustum.setFromProjectionMatrix(streamMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-  const jobs = [];
-  scene.traverse((object) => {
-    if (!object.isMesh || !object.visible || !object.material) return;
-    object.updateWorldMatrix(true, false);
-    streamBounds.setFromObject(object);
-    const near = streamBounds.distanceToPoint(camera.position) < 120;
-    const inView = streamFrustum.intersectsBox(streamBounds);
-    if (!near && !inView) return;
-    const distance = streamBounds.getCenter(streamCenter).distanceTo(camera.position);
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    materials.forEach((material) => {
-      if (streamed.has(material)) return;
-      jobs.push({ material, priority: distance + (inView ? 0 : 80) });
-    });
-  });
-  jobs.sort((a, b) => a.priority - b.priority);
-  const started = [];
-  for (const { material } of jobs) {
-    if (streamed.has(material) || (!initial && streaming >= 2)) continue;
-    streaming++;
-    const task = loadMaterialTextures(material).catch((error) => {
-      streamed.delete(material);
-      console.warn('Повтор загрузки материала', error);
-    }).finally(() => { streaming--; });
-    streamed.set(material, task);
-    started.push(task);
-  }
-  return Promise.all(started);
+  shared.stream(camera).catch((error) => console.warn(error));
+  const loadedNow = shared.streamStats().loaded;
+  if (loadedNow !== loadedChunks) { loadedChunks = loadedNow; shadowDirty = true; }
 }
 
 async function start() {
@@ -714,40 +750,40 @@ async function start() {
   const breathe = () => new Promise((r) => setTimeout(r, 0));
   progress('Собираем улицу по геодезии');
   await breathe();
-  const gltf = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
-  const load = (name) => gltf.loadAsync(`assets/models/${name}.glb`).then((r) => r.scene);
-  const billboardLoad = new THREE.TextureLoader().loadAsync('assets/tree.webp');
-  await Promise.all([loadStones(), document.fonts.load('700 58px Golos').catch(() => {})]);
-  shared = buildWorld(scene, tier);
+  const load = async (name) => {
+    const [{ GLTFLoader }, { MeshoptDecoder }] = await Promise.all([import('three/examples/jsm/loaders/GLTFLoader.js'), import('three/examples/jsm/libs/meshopt_decoder.module.js')]);
+    return (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(`assets/models/${name}.glb`)).scene;
+  };
+  shared = await loadPreparedWorld(scene, renderer, { collision: !railMode });
   mark('мир');
   addViewMarkers();
   setupUI();
+  if (touch) document.body.classList.toggle('collapsed', innerWidth > innerHeight);
   progress('Выкладываем камень');
   await breathe();
   applyDesign(DESIGNS[0]);
   shared.started = true;
   mark('стены');
-  await setTime('day');
+  await setTime('overcast');
   mark('небо');
   progress('Настраиваем физику');
   await breathe();
-  const billboard = await billboardLoad;
-  billboard.colorSpace = THREE.SRGBColorSpace; billboard.anisotropy = 8;
-  const vegetation = plantVegetation(scene, shared, { billboard }, tier);
-  updateTrees = vegetation.updateTrees;
-  cullWorld = distanceCuller([...shared.group.children, ...shared.plants.children].filter((o) => (o.isMesh || o.isInstancedMesh) && !o.userData.keepWhole && !shared.groundMaterials.has(o.material)), tier === 'high' ? 300 : 190);
+  updateTrees = shared.treeUpdates.updateTrees;
 
   birds = createBirds(scene, tier === 'high' ? 36 : 18);
-  shared.collision.updateMatrixWorld(true);
-  worldOctree.fromGraphNode(shared.collision);
+  shared.collision?.updateMatrixWorld(true);
+  if (railMode) buildRail(); else { const { Octree } = await import('three/examples/jsm/math/Octree.js'); worldOctree = new Octree(); worldOctree.fromGraphNode(shared.collision); }
   mark('физика');
   setupArrows();
   spawn();
+  camera.position.copy(player.end);
+  camera.rotation.set(pitch, yaw, 0);
+  await shared.stream(camera, 'near');
   progress('Готовим свет');
   await breathe();
-  movePlayer(.001);
-  followSun(); followSun(); followSun();
-  await streamVisibleScene(true);
+  if (!railMode) movePlayer(.001); else moveAlongRail(.001);
+  shadowDirty = true; followSun();
+
   await renderer.compileAsync(scene, camera).catch(() => {});
   mark('шейдеры');
   window.__street = { THREE, simulate: (seconds) => { for (let i = 0, n = seconds * 60; i < n; i++) movePlayer(1 / 60); }, setYaw: (v) => { yaw = v; }, get yaw() { return yaw; }, get pitch() { return pitch; }, sectionPoint, get autopilot() { return !!autopilot; }, composer, gtao, goto, setTime, applyDesign, DESIGNS, placePlayer, player, velocity, keys, scene, camera, stations, walls, bays, shared, setTarget: (t) => { target = t; }, get fps() { return fps.value; }, tap, arrowGo, get onFloor() { return onFloor; }, ready: true };
@@ -756,15 +792,16 @@ async function start() {
   window.streetReady();
   $('loader').classList.add('done');
   mark('первый кадр');
-  if (!lite && !params.has('no-cars')) load('sedan').then((sedan) => {
+  // Traffic is off for now, ?cars turns it back on.
+  if (params.has('cars')) load('sedan').then((sedan) => {
     spawnTraffic(sedan);
     moveTraffic(0);
   }).catch((error) => console.warn('Не удалось загрузить машины', error));
 
   // Full tree models replace the nearest billboards a moment later, without holding up the start.
   if (tier === 'high') load('island_tree_01').then((tree) => {
-    vegetation.upgradeTrees(tree); mark('деревья');
+    shared.treeUpdates.upgradeTrees(tree); shadowDirty = true; mark('деревья');
     if (params.has('bake')) window.__bake = () => bakeTree(tree);
   }).catch(() => {});
 }
-start().catch((error) => { $('load-text').textContent = 'Не удалось запустить сцену: ' + error.message; console.error(error); });
+start().catch((error) => { $('load-text').textContent = 'Не удалось загрузить сцену. Обновите страницу.'; console.error(error); });

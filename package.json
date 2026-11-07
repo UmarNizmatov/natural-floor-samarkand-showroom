@@ -1,1 +1,19 @@
-{"name":"samarkand-street-final","private":true,"type":"module","scripts":{"build":"esbuild src/main.js --bundle --format=esm --minify --outfile=public/app.js"},"dependencies":{"three":"0.186.0"},"devDependencies":{"esbuild":"0.25.0"}}
+{
+  "name": "samarkand-street-final",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --format=esm --minify --splitting --outdir=public --entry-names=app --chunk-names=chunks/[name]-[hash]",
+    "prepare:assets": "node scripts/prepare-assets.mjs",
+    "compress:textures": "node scripts/compress-textures.mjs",
+    "check:streaming": "node scripts/check-streaming.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "three": "0.186.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.0",
+    "playwright-core": "^1.64.0"
+  }
+}

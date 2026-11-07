@@ -15,25 +15,24 @@
 
 <div class="tools">
   <div class="seg" role="group" aria-label="Время суток">
-    <button type="button" data-time="day" aria-pressed="true">День</button>
+    <button type="button" data-time="overcast" aria-pressed="true">Как на фото</button>
+    <button type="button" data-time="day" aria-pressed="false">Солнце</button>
     <button type="button" data-time="sunset" aria-pressed="false">Закат</button>
     <button type="button" data-time="night" aria-pressed="false">Ночь</button>
   </div>
-  <button type="button" id="open-route" class="pill">Маршрут</button>
-  <a class="photo-route" href="route.html">Без 3D</a>
 </div>
 
 <p id="hint"><span id="hint-text"></span></p>
 <p id="fps"></p>
+<p id="stream-status" role="status" hidden>Подгружаем участок…</p>
 
+
+<div class="touch-controls" role="group" aria-label="Управление прогулкой">
+    <button type="button" data-walk="back" aria-label="Назад">↓</button>
+    <button type="button" data-walk="forward" aria-label="Вперёд">↑</button>
+  </div>
 
 <section class="panel" aria-label="Дизайны">
-  <div class="touch-controls" role="group" aria-label="Управление прогулкой">
-    <button type="button" data-walk="back" aria-label="Идти к южным воротам">↓</button>
-    <button type="button" data-walk="cross" aria-label="Перейти дорогу">⇄</button>
-    <button type="button" data-walk="forward" aria-label="Идти к северным воротам">↑</button>
-    <button type="button" id="jump">Прыжок</button>
-  </div>
   <div class="panel-head">
     <div class="titles"><h1 id="design-title"></h1><p id="design-hint"></p></div>
     <button type="button" id="assembly" class="accent" hidden>К точке сборки</button>
@@ -53,17 +52,6 @@
   </div>
 </section>
 
-<dialog id="route">
-  <form method="dialog"><h2>Куда перейти</h2>
-    <button type="button" data-go="low">Длинная стена, 338,70 м²</button>
-    <button type="button" data-go="high">Высокая стена, 288,94 м²</button>
-    <button type="button" data-go="step">Ступенчатая стена, 43,22 м²</button>
-    <button type="button" data-go="zone68">Откос, 68 м²</button>
-    <button type="button" data-go="zone52">Откос, 52 м²</button>
-    <button type="button" data-go="road">Середина дороги</button>
-    <button class="close">Закрыть</button>
-  </form>
-</dialog>
 <script>
 (function () {
   var timer = null;

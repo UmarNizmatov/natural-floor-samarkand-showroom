@@ -5,11 +5,11 @@ import { WORD } from './word.js';
 const STONE_NAMES = ['Grafit', 'Arktika', 'Kanyon', 'Safari', 'Rubin', 'Saxro', 'Zumrad', 'Koksaroy', 'Novvot', 'Terra', 'Marvarid', 'BlackCoffee',
   'Bodom', 'Soxil', 'Riverstone', 'Mozayka', 'Nurtosh', 'Bahor', 'Chashma', 'Galaktika', 'Zarafshon', 'Xazon', 'Anor', 'Terrachcho', 'Panda', 'Zamin', 'Safed'];
 const images = {};
-export const loadStones = () => Promise.all(STONE_NAMES.map((name) => new Promise((resolve, reject) => {
+export const loadStones = () => Promise.all([...STONE_NAMES, 'photo:concrete'].map((name) => new Promise((resolve, reject) => {
   const image = new Image();
   image.onload = () => { images[name] = image; resolve(); };
   image.onerror = reject;
-  image.src = `assets/stone/${name}.jpg`;
+  image.src = name === 'photo:concrete' ? 'assets/photo/concrete.webp' : `assets/stone/${name}.jpg`;
 })));
 
 const STONE_TILE_METRES = 0.3;
@@ -274,6 +274,14 @@ function assembly(k, { L, H, wall, id }) {
   }
 }
 
+// The wall as it stands today, from the customer's own photograph: before and after in one click.
+function asIs(k, { L, H }) {
+  const pattern = k.ctx.createPattern(images['photo:concrete'], 'repeat');
+  pattern.setTransform(new DOMMatrix().scale(33 / 2048, -5.4 / 380));
+  k.ctx.fillStyle = pattern;
+  k.ctx.fillRect(-1, -1, L + 2, H + 2);
+}
+
 // Base: the concrete as poured, cleaned, for comparison.
 function plain(k, { L, H }) { k.rect('Marvarid', -1, -1, L + 2, H + 2); }
 
@@ -289,6 +297,7 @@ export const DESIGNS = [
   { id: 'bulge', title: 'Волна', hint: 'Ступени зигзага с откосов переходят на стену и плывут, пока едешь мимо', paint: bulge },
   { id: 'assembly', title: 'Точка сборки', hint: 'С одной отметки на тротуаре осколки складываются в звезду', paint: assembly, marker: true },
   { id: 'plain', title: 'Без рисунка', hint: 'Один камень, для сравнения', paint: plain },
+  { id: 'asis', title: 'Как сейчас', hint: 'Настоящий бетон с фото объекта, чтобы сравнить до и после', paint: asIs },
 ];
 
 export function paintDesign(ctx, design, { L, H, s0 = 0, pxPerMetre, wall, seed = 1 }) {

@@ -32,13 +32,11 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .card{flex:none;width:148px;padding:0;text-align:left;scroll-snap-align:start;border-radius:10px;overflow:hidden;border:2px solid transparent;background:rgba(0,0,0,.25);transition:border-color .16s,transform .16s}
 .card:active{transform:scale(.97)}
 .card[aria-current=true]{border-color:var(--accent)}
-.card canvas{display:block;width:100%;height:46px}
+.card canvas,.card img{display:block;width:100%;height:46px}
 .card span{display:block;padding:5px 8px 6px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .touch-controls{display:none}
-.touch .touch-controls{position:absolute;inset:auto 0 calc(100% + 10px);display:flex;gap:6px;pointer-events:none}
 .touch-controls button{min-width:44px;min-height:44px;padding:0 10px;border-radius:12px;border:1px solid var(--line);background:var(--glass);backdrop-filter:blur(14px);pointer-events:auto;touch-action:manipulation}
 .touch-controls [data-walk]{font-size:21px}
-#jump{margin-left:auto}
 dialog{border:1px solid var(--line);border-radius:14px;background:#191d21;color:var(--ink);padding:16px;width:min(380px,calc(100vw - 32px))}
 dialog::backdrop{background:rgba(0,0,0,.45)}
 dialog h2{margin:0 0 10px;font-size:17px}
@@ -51,12 +49,17 @@ dialog .close{background:none;text-align:center;color:var(--mute)}
 .ring{width:42px;height:42px;border-radius:50%;border:3px solid rgba(255,255,255,.14);border-top-color:var(--accent);animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.ring{animation-duration:3s}*{transition:none!important}}
-@media (max-width:640px){.brand span{display:none}.tools{top:calc(max(14px,env(safe-area-inset-top)) + 28px);left:var(--gutter);justify-content:space-between}#fps{top:calc(max(14px,env(safe-area-inset-top)) + 72px)}.seg button{padding:0 10px;font-size:13px}.card{width:124px}.card canvas{height:38px}#hint{top:calc(max(14px,env(safe-area-inset-top)) + 74px);width:max-content;border-radius:14px}.titles p{white-space:normal;font-size:12px}}
+@media (max-width:640px){.brand span{display:none}.tools{top:calc(max(14px,env(safe-area-inset-top)) + 28px);left:var(--gutter);justify-content:space-between}#fps{top:calc(max(14px,env(safe-area-inset-top)) + 72px)}.seg button{padding:0 10px;font-size:13px}.card{width:124px}.card canvas,.card img{height:38px}#hint{top:calc(max(14px,env(safe-area-inset-top)) + 74px);width:max-content;border-radius:14px}.titles p{white-space:normal;font-size:12px}}
 #stage canvas{cursor:grab}
 #stage canvas.dragging{cursor:grabbing}
 
-.photo-route,#loader a{color:var(--ink)}
-.photo-route{padding:8px 10px;border-radius:10px;background:var(--glass);font-size:12px;text-decoration:none}
+#loader a{color:var(--ink)}
 @media (max-width:640px){
-  .tools .photo-route{position:fixed;top:max(8px,env(safe-area-inset-top));right:var(--gutter)}
-}
+  .tools }
+
+#stream-status{position:fixed;top:110px;left:50%;transform:translateX(-50%);padding:10px 14px;background:var(--glass);border-radius:10px;z-index:3}
+
+/* Phone arrows: fixed in place, the same spot in every state and orientation. */
+.touch .touch-controls{position:fixed;right:var(--gutter);top:50%;transform:translateY(-50%);display:flex;flex-direction:column-reverse;gap:12px;background:none;border:0;padding:0;margin:0;left:auto;bottom:auto;width:auto;z-index:3}
+.touch .touch-controls [data-walk]{width:64px;height:64px;border-radius:50%;font-size:28px;line-height:1;background:rgba(16,19,22,.72);border:1px solid var(--line);color:#fff;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);touch-action:manipulation}
+.touch .touch-controls [data-walk]:disabled{opacity:.28}
